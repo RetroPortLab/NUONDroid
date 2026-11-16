@@ -1,3 +1,4 @@
 [submodule "external/NuanceResurrection"]
 	path = external/NuanceResurrection
 	url = https://github.com/andkrau/NuanceResurrection.git
+	ignore = dirty
