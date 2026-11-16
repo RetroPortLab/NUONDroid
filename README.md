@@ -105,6 +105,12 @@ idempotent):
   which is every commercial NUON disc) are read in place like an ISO; raw CD-style
   images (2352/2448-byte sectors) are converted to a temporary ISO first. Worth
   offering upstream.
+- `0004` forces the per-packet interpreter on builds with no native code emitter
+  (ARM, and x86-64 without asmjit), whatever `nuance.cfg` says. With
+  `[DynamicCompiler] Enabled` those builds use the IL block path, which stalls the
+  emulated MPEs: games boot to a black screen with no sound. Found by running the
+  core headless with nuontest, which freezes at "testing in" without this patch and
+  passes all instruction tests with it. Worth reporting upstream.
 
 ## Licence
 

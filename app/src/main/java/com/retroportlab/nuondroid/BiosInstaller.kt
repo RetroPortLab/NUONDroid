@@ -23,13 +23,16 @@ object BiosInstaller {
         }
 
         // Rewritten every launch so the settings screen is the single source of truth.
+        // DynamicCompiler must stay off: there is no ARM JIT, and asking for one
+        // drops the core into a block mode that stalls the NUON (black screen, no
+        // sound). patches/0004 also forces it off inside the core.
         File(dir, "nuance.cfg").writeText(
             """
             [AudioInterrupts]
             Enabled
 
             [DynamicCompiler]
-            Enabled
+            Disabled
 
             [CompilerConstantPropagation]
             Enabled
