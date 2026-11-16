@@ -49,7 +49,7 @@ keystore and its passwords somewhere safe outside the repo.
 
 1. Install the APK, open it, and allow **all files access** (the core opens games by
    plain file path, and ISOs are read in place rather than copied).
-2. **Games folder** → pick the folder with your NUON games. `.iso`, `.chd`, `.zip`,
+2. **Games folder** → pick the folder with your NUON games. `.iso`, `.chd`, `.mds`/`.mdf`, `.zip`,
    `.run`, `.cof`, `.nuon`, `.cd` and `.img` are listed.
 3. Tap a game. **Select + Start** (or Back) opens the in-game menu. In menus, A selects and B goes back.
 
@@ -101,6 +101,10 @@ idempotent):
 - `0002` defines `struct retro_message` in upstream's trimmed `libretro.h`. Upstream
   commit f28138d (15 Nov 2026) started using it without defining it, which breaks every
   libretro build of the core, not just Android. Drop this patch once upstream fixes it.
+- `0003` adds Alcohol 120% `.mds`/`.mdf` images. DVD-style images (2048-byte sectors,
+  which is every commercial NUON disc) are read in place like an ISO; raw CD-style
+  images (2352/2448-byte sectors) are converted to a temporary ISO first. Worth
+  offering upstream.
 
 ## Licence
 

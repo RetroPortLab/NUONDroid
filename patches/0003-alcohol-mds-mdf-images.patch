@@ -1,0 +1,148 @@
+diff --git a/src/archive.cpp b/src/archive.cpp
+index 3a1d7ae..da494d3 100644
+--- a/src/archive.cpp
++++ b/src/archive.cpp
+@@ -451,6 +451,102 @@ std::string MountAndFind(const char* archivePath)
+ 
+ //
+ 
++// Alcohol 120% images (.mds + .mdf). The .mds is only a descriptor; the
++// sectors live in the .mdf beside it. DVD images - every commercial NUON disc -
++// are stored as plain 2048-byte sectors, so the .mdf already is an ISO and is
++// read in place. CD-style images keep raw 2352- or 2448-byte sectors (sync,
++// header, EDC/ECC, optional subchannel) and are converted to a temporary ISO.
++bool IsMdsMdfPath(const std::string& s)
++{
++  return HasExtensionICase(s, ".mds") || HasExtensionICase(s, ".mdf");
++}
++
++static bool FileExists(const std::string& path)
++{
++  FILE* fp = fopen(path.c_str(), "rb");
++  if (!fp) return false;
++  fclose(fp);
++  return true;
++}
++
++// game.mds -> game.mdf (the extension's case varies between rippers)
++static std::string MdfForMds(const std::string& mds)
++{
++  const std::string base = mds.substr(0, mds.size() - 4);
++  static const char* exts[] = { ".mdf", ".MDF", ".Mdf", nullptr };
++  for (const char** e = exts; *e; e++)
++    if (FileExists(base + *e)) return base + *e;
++  return std::string();
++}
++
++// Finds where each sector's 2048 bytes of user data sit by looking for the
++// volume recognition area at sector 16: ISO 9660 "CD001" or UDF "BEA01".
++static bool ProbeMdfLayout(FILE* fp, uint32_t& sectorSize, uint32_t& dataOffset)
++{
++  static const uint32_t layouts[][2] = {
++    { 2048, 0 },             // DVD, or a CD image stored as user data only
++    { 2352, 16 }, { 2352, 24 }, // raw CD: Mode 1 / Mode 2 Form 1
++    { 2448, 16 }, { 2448, 24 }, // raw CD + 96 bytes of subchannel
++  };
++  for (const auto& l : layouts) {
++    unsigned char id[6];
++    if (ISO_FSEEK(fp, (uint64_t)16 * l[0] + l[1], SEEK_SET) != 0) continue;
++    if (fread(id, 1, 6, fp) != 6) continue;
++    if (memcmp(id + 1, "CD001", 5) == 0 || memcmp(id + 1, "BEA01", 5) == 0) {
++      sectorSize = l[0];
++      dataOffset = l[1];
++      return true;
++    }
++  }
++  return false;
++}
++
++// Returns the .mdf itself when it is already a 2048-byte-sector image,
++// otherwise <tempDir>/extracted.iso holding just the user data. "" on failure.
++std::string MdfToIso(const char* mdfPath, const std::string& tempDir)
++{
++  FILE* in = fopen(mdfPath, "rb");
++  if (!in) {
++    fprintf(stderr, "Cannot open %s\n", mdfPath);
++    return std::string();
++  }
++  uint32_t sectorSize = 0, dataOffset = 0;
++  if (!ProbeMdfLayout(in, sectorSize, dataOffset)) {
++    fprintf(stderr, "%s is not a recognisable disc image (no ISO 9660 or UDF volume found)\n", mdfPath);
++    fclose(in);
++    return std::string();
++  }
++  if (sectorSize == 2048) {
++    fclose(in);
++    return std::string(mdfPath);
++  }
++
++  const std::string isoPath = tempDir + PATH_SEP + "extracted.iso";
++  FILE* out = fopen(isoPath.c_str(), "wb");
++  if (!out) {
++    fprintf(stderr, "Cannot create %s\n", isoPath.c_str());
++    fclose(in);
++    return std::string();
++  }
++  ISO_FSEEK(in, 0, SEEK_SET);
++  std::vector<unsigned char> sector(sectorSize);
++  uint64_t sectors = 0;
++  while (fread(sector.data(), 1, sectorSize, in) == sectorSize) {
++    if (fwrite(sector.data() + dataOffset, 1, 2048, out) != 2048) {
++      fprintf(stderr, "Short write to %s\n", isoPath.c_str());
++      fclose(out);
++      fclose(in);
++      return std::string();
++    }
++    sectors++;
++  }
++  fclose(out);
++  fclose(in);
++  fprintf(stderr, "Converted MDF: %s (%u-byte sectors) -> %s (%llu sectors)\n",
++          mdfPath, sectorSize, isoPath.c_str(), (unsigned long long)sectors);
++  return isoPath;
++}
++
+ std::string ResolveGameFile(const char* inputPath)
+ {
+   if (!inputPath || !*inputPath) return std::string();
+@@ -470,6 +566,27 @@ std::string ResolveGameFile(const char* inputPath)
+     return ExtractIsoBootAndArmDataReads(iso.c_str(), tempDir);
+   }
+ 
++  // Alcohol 120%: the .mds names the .mdf beside it; the .mdf is (or becomes) an ISO.
++  if (IsMdsMdfPath(input)) {
++    const std::string mdf = HasExtensionICase(input, ".mds") ? MdfForMds(input) : input;
++    if (mdf.empty()) {
++      fprintf(stderr, "%s: no matching .mdf found next to it\n", inputPath);
++      return std::string();
++    }
++    const std::string tempDir = MakeTempDir();
++    if (tempDir.empty()) return std::string();
++    g_tempPaths.push_back(tempDir);
++    const std::string iso = MdfToIso(mdf.c_str(), tempDir);
++    if (iso.empty()) return std::string();
++    if (iso != mdf) g_tempPaths.push_back(iso);
++    std::string result = ExtractIsoBootAndArmDataReads(iso.c_str(), tempDir);
++#if !defined(_WIN32) && !defined(NUANCE_NO_SUBPROCESS)
++    if (result.empty())
++      result = MountAndFind(iso.c_str());
++#endif
++    return result;
++  }
++
+   // ISO and ZIP are read in-process on every platform: the ISO9660 reader, and miniz
+   if (IsIsoPath(input) || IsZipPath(input)) {
+     const std::string tempDir = MakeTempDir();
+diff --git a/src/libretro.cpp b/src/libretro.cpp
+index 4a32ab6..5ff8538 100644
+--- a/src/libretro.cpp
++++ b/src/libretro.cpp
+@@ -272,7 +272,7 @@ void retro_get_system_info(struct retro_system_info *info)
+     memset(info, 0, sizeof(*info));
+     info->library_name = "Nuance";
+     info->library_version = "0.6.7";
+-    info->valid_extensions = "run|cof|nuon|cd|iso|img|chd";
++    info->valid_extensions = "run|cof|nuon|cd|iso|img|chd|mds|mdf";
+     info->need_fullpath = true;
+     info->block_extract = false; // let RetroArch extract ZIPs for us
+ }

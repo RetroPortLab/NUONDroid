@@ -1,0 +1,3 @@
+- Alcohol 120% disc images (.mds + .mdf) now work. Pick the game as usual; each .mds/.mdf pair shows up once in the library.
+- DVD-style .mdf files (every commercial NUON disc) are read in place, just like an .iso.
+- CD-style raw .mdf rips (2352 or 2448-byte sectors) are converted to a temporary image when the game starts.

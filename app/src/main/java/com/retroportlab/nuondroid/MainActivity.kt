@@ -59,6 +59,7 @@ class MainActivity : Activity() {
                 "iso", "img" -> "Disc image"
                 "chd" -> "CHD"
                 "zip" -> "ZIP"
+                "mds", "mdf" -> "Alcohol image"
                 else -> "Folder"
             }
             tags = if (t.isEmpty()) kind else "$t, $kind"
@@ -103,7 +104,7 @@ class MainActivity : Activity() {
 
         if (!hasStorageAccess()) {
             list.addView(ui.sectionTitle("Welcome"))
-            list.addView(intro("NUONDroid reads your NUON disc images (.iso, .chd, .zip, or an extracted NUON folder) "
+            list.addView(intro("NUONDroid reads your NUON disc images (.iso, .chd, .mds/.mdf, .zip, or an extracted NUON folder) "
                     + "straight from storage, so it needs permission to access all files."))
             val allow = ui.row("Allow file access", "Opens Android's settings; switch NUONDroid on, then come back", null) { requestStorageAccess() }
             list.addView(allow)
@@ -114,7 +115,7 @@ class MainActivity : Activity() {
         val folder = prefs.gamesDir
         if (folder.isEmpty()) {
             list.addView(ui.sectionTitle("Welcome"))
-            list.addView(intro("Choose the folder that holds your NUON games (.iso, .chd or .zip disc images, "
+            list.addView(intro("Choose the folder that holds your NUON games (.iso, .chd, .mds/.mdf or .zip disc images, "
                     + "or extracted discs with a NUON folder inside) and they'll appear here. The BIOS is built in."))
             val choose = ui.row("Choose games folder", "Pick the folder once; NUONDroid remembers it", null) { pickFolder() }
             list.addView(choose)
@@ -144,10 +145,13 @@ class MainActivity : Activity() {
     /** Disc images anywhere a few levels down; loose executables only inside a NUON folder (one per extracted disc). */
     private fun scanDir(dir: File, depth: Int, out: MutableList<Game>) {
         val entries = dir.listFiles() ?: return
+        val names = entries.map { it.name.lowercase(Locale.US) }.toSet()
         for (f in entries) {
             if (f.isDirectory) { if (depth < 3) scanDir(f, depth + 1, out); continue }
             val name = f.name.lowercase(Locale.US)
             if (name.contains("bios")) continue
+            // Alcohol 120% images come as a .mds + .mdf pair: list the game once, by its .mds.
+            if (name.endsWith(".mdf") && name.dropLast(4) + ".mds" in names) continue
             when (f.extension.lowercase(Locale.US)) {
                 in IMAGE_EXTENSIONS -> out += Game(f)
                 in LOOSE_EXTENSIONS -> if (name == "nuon.run" || dir.name.equals("NUON", true) && name.endsWith(".cd")) out += Game(f)
@@ -160,7 +164,7 @@ class MainActivity : Activity() {
         foundUpdate?.let { list.addView(updateBanner()) }
         if (games.isEmpty()) {
             list.addView(ui.sectionTitle("No games found"))
-            list.addView(ui.text("$folder has no NUON games (.iso, .chd, .zip or a NUON/nuon.run folder), "
+            list.addView(ui.text("$folder has no NUON games (.iso, .chd, .mds/.mdf, .zip or a NUON/nuon.run folder), "
                     + "or access to it was lost.", 15f, Ui.SUBTEXT, false))
             val r = ui.row("Choose games folder", null, null) { pickFolder() }
             list.addView(r)
@@ -501,7 +505,7 @@ class MainActivity : Activity() {
         private const val SCREEN_UPDATE = 2
         private const val REQ_FOLDER = 42
         // What the core's ResolveGameFile / loaders accept.
-        private val IMAGE_EXTENSIONS = setOf("iso", "chd", "zip", "img")
+        private val IMAGE_EXTENSIONS = setOf("iso", "chd", "zip", "img", "mds", "mdf")
         private val LOOSE_EXTENSIONS = setOf("run", "cof", "nuon", "cd")
     }
 }
