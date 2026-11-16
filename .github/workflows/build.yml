@@ -1,0 +1,34 @@
+# Build check on every push and pull request. Without the release key this
+# produces a debug-signed APK (an artifact for testing, not an update).
+name: Build
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['dist/**', '**.md']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with: { submodules: recursive }
+
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: 8.9 }
+
+      - name: Install NDK + CMake
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses >/dev/null || true
+          "$SDKM" "ndk;27.2.12479018" "cmake;3.22.1"
+
+      - name: Build APK (arm64-v8a)
+        run: gradle --no-daemon :app:assembleRelease
+
+      - uses: actions/upload-artifact@v4
+        with: { name: NUONDroid-test-apk, path: app/build/outputs/apk/release/*.apk }

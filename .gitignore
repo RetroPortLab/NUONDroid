@@ -1,0 +1,22 @@
+# Build output
+.gradle/
+build/
+app/build/
+app/.cxx/
+local.properties
+.idea/
+*.apk
+*.aab
+
+# Never commit games, BIOS dumps or signing keys
+*.iso
+*.chd
+*.zip
+*.img
+*.keystore
+*.jks
+keystore.properties
+
+# Release APKs published by .github/workflows/release.yml
+!dist/*.apk
+.kotlin/

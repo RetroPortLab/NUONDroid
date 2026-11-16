@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- NUONDroid launcher foreground: a brushed-metal slanted "N" inside an orbit ring (art/icon.svg). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <group android:pivotX="54" android:pivotY="54" android:scaleX="0.9" android:scaleY="0.9">
+        <!-- orbit, back half -->
+        <group android:translateX="54" android:translateY="55" android:rotation="-22">
+            <path android:pathData="M-38,0 A38,12.5 0 0 1 38,0" android:strokeWidth="4.5"
+                android:strokeLineCap="round" android:strokeAlpha="0.75">
+                <aapt:attr name="android:strokeColor">
+                    <gradient android:type="linear" android:startX="-38" android:startY="-12" android:endX="38" android:endY="12">
+                        <item android:offset="0" android:color="#FF5CF2FF" />
+                        <item android:offset="1" android:color="#FF0078A8" />
+                    </gradient>
+                </aapt:attr>
+            </path>
+        </group>
+        <group android:translateX="1.6" android:translateY="1.6">
+            <path android:fillColor="#73000000" android:pathData="M31,78 L39,30 L50,30 L62,59 L67,30 L78,30 L70,78 L59,78 L47,49 L42,78 Z" />
+        </group>
+        <path android:pathData="M31,78 L39,30 L50,30 L62,59 L67,30 L78,30 L70,78 L59,78 L47,49 L42,78 Z" android:strokeColor="#FF2A2C33" android:strokeWidth="1.2" android:strokeLineJoin="round">
+            <aapt:attr name="android:fillColor">
+                <gradient android:type="linear" android:startX="0" android:startY="30" android:endX="0" android:endY="78">
+                    <item android:offset="0" android:color="#FFFFFFFF" />
+                    <item android:offset="0.48" android:color="#FFD9DCE4" />
+                    <item android:offset="0.52" android:color="#FF9AA0AE" />
+                    <item android:offset="1" android:color="#FFE9EBF0" />
+                </gradient>
+            </aapt:attr>
+        </path>
+        <!-- orbit, front half, and its satellite -->
+        <group android:translateX="54" android:translateY="55" android:rotation="-22">
+            <path android:pathData="M-38,0 A38,12.5 0 0 0 38,0" android:strokeWidth="4.5" android:strokeLineCap="round">
+                <aapt:attr name="android:strokeColor">
+                    <gradient android:type="linear" android:startX="-38" android:startY="-12" android:endX="38" android:endY="12">
+                        <item android:offset="0" android:color="#FF5CF2FF" />
+                        <item android:offset="1" android:color="#FF0078A8" />
+                    </gradient>
+                </aapt:attr>
+            </path>
+            <path android:fillColor="#FFE8FDFF" android:pathData="M27,8.8 m-4.2,0 a4.2,4.2 0 1 0 8.4,0 a4.2,4.2 0 1 0 -8.4,0" />
+        </group>
+    </group>
+</vector>

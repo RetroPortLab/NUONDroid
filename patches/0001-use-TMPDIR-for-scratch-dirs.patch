@@ -1,0 +1,17 @@
+diff --git a/src/archive.cpp b/src/archive.cpp
+index fd32c53..3a1d7ae 100644
+--- a/src/archive.cpp
++++ b/src/archive.cpp
+@@ -150,8 +150,10 @@ std::string MakeTempDir()
+   }
+   return std::string();
+ #else
+-  char tmpl[] = "/tmp/nuance_XXXXXX";
+-  char* dir = mkdtemp(tmpl);
++  // $TMPDIR when set (Android has no /tmp; the app points this at its cache dir).
++  const char* base = getenv("TMPDIR");
++  std::string tmpl = std::string((base && *base) ? base : "/tmp") + "/nuance_XXXXXX";
++  char* dir = mkdtemp(&tmpl[0]);
+   return dir ? std::string(dir) : std::string();
+ #endif
+ }

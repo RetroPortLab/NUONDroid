@@ -1,0 +1,16 @@
+diff --git a/src/libretro.h b/src/libretro.h
+index 82f24ee..a508261 100644
+--- a/src/libretro.h
++++ b/src/libretro.h
+@@ -169,6 +169,11 @@ struct retro_log_callback {
+    retro_log_printf_t log;
+ };
+ 
++struct retro_message {
++   const char *msg;
++   unsigned frames;
++};
++
+ #define RETRO_HW_FRAME_BUFFER_VALID ((void*)-1)
+ 
+ void retro_init(void);
