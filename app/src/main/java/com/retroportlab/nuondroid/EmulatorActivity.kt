@@ -49,6 +49,16 @@ class EmulatorActivity : Activity() {
     private var startHeld = false
     private var swallowUps = 0   // releases of the keys that opened the pause menu
 
+    // VLM mode: the player firmware's light show, driven by the user's music.
+    private var vlm = false
+    private var music: MusicPlayer? = null
+    private var tracks: List<File> = emptyList()
+    private var effect = -1               // effect we asked for
+    private var dark = 0                  // consecutive half-seconds of black picture
+    private var lastChange = 0L           // when the effect last changed (auto change)
+    private var effectDir = 1
+    private lateinit var infoView: TextView
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -60,8 +70,16 @@ class EmulatorActivity : Activity() {
 
         prefs = Prefs.of(this)
         ui = Ui(this)
-        gamePath = intent.getStringExtra(EXTRA_GAME) ?: run { finish(); return }
-        gameTitle = intent.getStringExtra(EXTRA_TITLE) ?: File(gamePath).nameWithoutExtension
+        vlm = intent.getBooleanExtra(EXTRA_VLM, false)
+        if (vlm) {
+            tracks = (intent.getStringArrayListExtra(EXTRA_TRACKS) ?: arrayListOf()).map { File(it) }
+            if (tracks.isEmpty() || !VlmFirmware.installed(this)) { finish(); return }
+            gamePath = VlmFirmware.file(this).absolutePath
+            gameTitle = "Music (VLM)"
+        } else {
+            gamePath = intent.getStringExtra(EXTRA_GAME) ?: run { finish(); return }
+            gameTitle = intent.getStringExtra(EXTRA_TITLE) ?: File(gamePath).nameWithoutExtension
+        }
 
         glView = GLSurfaceView(this).apply {
             setEGLContextClientVersion(3)
@@ -80,6 +98,14 @@ class EmulatorActivity : Activity() {
         }
         root.addView(fpsView, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START).apply {
             leftMargin = ui.dp(12f); topMargin = ui.dp(12f)
+        })
+        infoView = ui.text("", 15f, Ui.TEXT, true).apply {
+            setPadding(ui.dp(12f), ui.dp(8f), ui.dp(12f), ui.dp(8f))
+            background = GradientDrawable().apply { setColor(0x99000000.toInt()); cornerRadius = ui.dp(8f).toFloat() }
+            visibility = View.GONE
+        }
+        root.addView(infoView, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.START).apply {
+            leftMargin = ui.dp(16f); bottomMargin = ui.dp(16f)
         })
         setContentView(root)
         hideSystemUi()
@@ -105,8 +131,11 @@ class EmulatorActivity : Activity() {
             val tmp = File(cacheDir, "tmp").apply { deleteRecursively(); mkdirs() }
             Native.init(system.absolutePath, saves.absolutePath, tmp.absolutePath)
             applyDisplayOptions()
+            if (vlm) Native.vlmEnable()
 
-            if (!Native.loadGame(gamePath)) {
+            if (Native.loadGame(gamePath)) {
+                if (vlm) runOnUiThread { startMusic() }
+            } else {
                 val why = Native.lastError()
                 runOnUiThread {
                     Toast.makeText(this@EmulatorActivity, "Could not start $gameTitle: $why", Toast.LENGTH_LONG).show()
@@ -146,6 +175,80 @@ class EmulatorActivity : Activity() {
         }
     }
 
+    // ------------------------------------------------------------ VLM mode --
+    private fun startMusic() {
+        if (music != null) return
+        val start = intent.getIntExtra(EXTRA_START, 0).coerceIn(0, tracks.size - 1)
+        music = MusicPlayer(tracks, start) { _, f -> runOnUiThread { showInfo("\u266A  " + f.nameWithoutExtension) } }
+            .also { it.start() }
+        lastChange = System.currentTimeMillis()
+        uiHandler.post(vlmWatcher)
+    }
+
+    private fun effectCount() = Native.vlmEffectCount()
+
+    private fun setEffect(n: Int, announce: Boolean) {
+        val count = effectCount()
+        if (count <= 0) return
+        effect = Math.floorMod(n, count)
+        Native.vlmSetEffect(effect)
+        dark = 0
+        lastChange = System.currentTimeMillis()
+        if (announce) showInfo("Effect ${effect + 1} of $count")
+    }
+
+    private fun stepEffect(dir: Int) { effectDir = dir; setEffect(effect + dir, true) }
+
+    private fun randomEffect() {
+        val count = effectCount()
+        if (count > 0) { effectDir = 1; setEffect((0 until count).random(), true) }
+    }
+
+    /** Twice a second: first effect once VLM is up, skip effects that stay black, auto change. */
+    private val vlmWatcher = object : Runnable {
+        override fun run() {
+            if (!menuOpen) {
+                val count = effectCount()
+                if (count > 0 && effect < 0) setEffect(prefs.vlmEffect.coerceIn(0, count - 1), false)
+                else if (count > 0) {
+                    // Some effects need a particular input (or are transitions) and draw nothing here.
+                    dark = if (Native.vlmLuma() <= 18) dark + 1 else 0
+                    if (dark >= 8) setEffect(effect + effectDir, false)
+                    else if (prefs.vlmAuto && System.currentTimeMillis() - lastChange > AUTO_MS) setEffect(effect + 1, false)
+                }
+            }
+            uiHandler.postDelayed(this, 500)
+        }
+    }
+
+    private val hideInfo = Runnable { infoView.visibility = View.GONE }
+    private fun showInfo(s: String) {
+        infoView.text = s
+        infoView.visibility = View.VISIBLE
+        uiHandler.removeCallbacks(hideInfo)
+        uiHandler.postDelayed(hideInfo, 3000)
+    }
+
+    /** VLM controls; returns true if the key was used. */
+    private fun vlmKey(code: Int, up: Boolean): Boolean {
+        val action: (() -> Unit)? = when (code) {
+            KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_DPAD_RIGHT -> { { stepEffect(1) } }
+            KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_DPAD_LEFT -> { { stepEffect(-1) } }
+            KeyEvent.KEYCODE_BUTTON_X, KeyEvent.KEYCODE_BUTTON_Y -> { { randomEffect() } }
+            KeyEvent.KEYCODE_BUTTON_R1, KeyEvent.KEYCODE_DPAD_DOWN -> { { music?.next() } }
+            KeyEvent.KEYCODE_BUTTON_L1, KeyEvent.KEYCODE_DPAD_UP -> { { music?.previous() } }
+            KeyEvent.KEYCODE_BUTTON_R2, KeyEvent.KEYCODE_BUTTON_L2 -> { {
+                prefs.vlmAuto = !prefs.vlmAuto
+                lastChange = System.currentTimeMillis()
+                showInfo(if (prefs.vlmAuto) "Effects change by themselves" else "Effects stay until you change them")
+            } }
+            else -> null
+        }
+        if (action == null) return false
+        if (up) action()
+        return true
+    }
+
     // ---------------------------------------------------------- pause menu --
     private fun openPauseMenu() {
         if (menuOpen) return
@@ -165,7 +268,19 @@ class EmulatorActivity : Activity() {
 
         val resume = ui.row("Resume", null, null) { closePauseMenu() }
         panel.addView(resume)
-        panel.addView(ui.row("Reset game", null, null) {
+        if (vlm) {
+            panel.addView(ui.row("Next track", null, null) { music?.next(); closePauseMenu() })
+            panel.addView(ui.row("Next effect", null, null) { closePauseMenu(); stepEffect(1) })
+            lateinit var autoRow: View
+            autoRow = ui.row("Change effects by themselves", null, if (prefs.vlmAuto) "On" else "Off") {
+                prefs.vlmAuto = !prefs.vlmAuto
+                lastChange = System.currentTimeMillis()
+                ui.setRowValue(autoRow, if (prefs.vlmAuto) "On" else "Off")
+            }
+            panel.addView(autoRow)
+            panel.addView(ui.row("Controls",
+                "A / B: next / previous effect  ·  X / Y: random effect\nR1 / L1: next / previous track  ·  L2 / R2: auto change on/off", null) { })
+        } else panel.addView(ui.row("Reset game", null, null) {
             glView.queueEvent { Native.reset() }
             closePauseMenu()
         })
@@ -197,7 +312,7 @@ class EmulatorActivity : Activity() {
         panel.addView(screenRow)
         panel.addView(upscaleRow)
         panel.addView(fpsRow)
-        panel.addView(ui.row("Quit to library", null, null) { finish() })
+        panel.addView(ui.row(if (vlm) "Stop music" else "Quit to library", null, null) { finish() })
 
         val sv = ScrollView(this).apply { addView(panel, FrameLayout.LayoutParams(ui.dp(360f), -2)) }
         dim.addView(sv, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
@@ -251,6 +366,11 @@ class EmulatorActivity : Activity() {
             if (up) openPauseMenu()
             return true
         }
+        if (vlm) {
+            if (e.repeatCount == 0 && vlmKey(code, up)) return true
+            if (code == KeyEvent.KEYCODE_BUTTON_START || code == KeyEvent.KEYCODE_BUTTON_SELECT) return true
+            return super.dispatchKeyEvent(e)
+        }
         if (e.repeatCount > 0 && pad.handles(code)) return true
         if (pad.onKey(code, down)) {
             Native.setInput(pad.mask)
@@ -260,6 +380,7 @@ class EmulatorActivity : Activity() {
     }
 
     override fun dispatchGenericMotionEvent(e: MotionEvent): Boolean {
+        if (vlm) return super.dispatchGenericMotionEvent(e)
         if (!menuOpen && (e.source and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK
             && e.action == MotionEvent.ACTION_MOVE) {
             pad.onMotion(e)
@@ -287,12 +408,16 @@ class EmulatorActivity : Activity() {
         uiHandler.removeCallbacks(fpsUpdater)
         Native.setPaused(true)
         Native.setInput(0)
+        if (isFinishing) music?.stop()
         if (isFinishing) glView.queueEvent { Native.unload() }   // runs on the GL thread, before it pauses
         glView.onPause()
         super.onPause()
     }
 
     override fun onDestroy() {
+        if (effect >= 0) prefs.vlmEffect = effect
+        music?.stop()
+        uiHandler.removeCallbacks(vlmWatcher)
         super.onDestroy()
         // Fresh process per game: unload already ran on the GL thread in onPause.
         if (isFinishing) Process.killProcess(Process.myPid())
@@ -314,5 +439,9 @@ class EmulatorActivity : Activity() {
     companion object {
         const val EXTRA_GAME = "game"
         const val EXTRA_TITLE = "title"
+        const val EXTRA_VLM = "vlm"
+        const val EXTRA_TRACKS = "tracks"
+        const val EXTRA_START = "start"
+        private const val AUTO_MS = 45_000L
     }
 }

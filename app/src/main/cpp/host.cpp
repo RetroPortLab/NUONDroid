@@ -13,6 +13,7 @@
 #include <aaudio/AAudio.h>
 
 #include <atomic>
+#include <mutex>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -51,6 +52,24 @@ bool g_glReady = false;
 bool g_haveFrame = false;
 
 GLuint g_fbo = 0, g_tex = 0, g_prog = 0;
+
+// ---------------------------------------------------------------- VLM -----
+// VLM mode (vlmhost.cpp in the core): the player firmware's Virtual Light Machine,
+// fed with music the Kotlin side decodes. The core's own audio is unused; the
+// music goes straight to AAudio and the last 128 played frames go to VLM.
+extern "C" {
+extern int nuance_vlm_mode;
+void nuance_vlm_set_audio(const int16_t* lr);
+void nuance_vlm_set_effect(int n);
+int nuance_vlm_effect(void);
+int nuance_vlm_effect_count(void);
+const uint8_t* nuance_vlm_frame(int* w, int* h, int* stride);
+}
+bool g_vlm = false;
+GLuint g_vlmTex = 0;
+int g_vlmW = 180, g_vlmH = 120;
+std::atomic<int> g_vlmLuma{0};          // mean luma of the last VLM frame, 0..255
+std::atomic<int> g_audioRate{44100};
 GLint g_uScan = -1, g_uFilter = -1, g_uTexSize = -1, g_uOutSize = -1;
 
 // ---------------------------------------------------------------- stats ----
@@ -91,6 +110,7 @@ constexpr uint32_t RING_FRAMES = 1u << 15;            // power of two
 int16_t g_ring[RING_FRAMES * 2];
 std::atomic<uint32_t> g_wr{0}, g_rd{0};               // monotonic frame counters
 AAudioStream* g_stream = nullptr;
+std::recursive_mutex g_streamMx;   // stream open/close/pause from the GL, UI and decoder threads
 
 aaudio_data_callback_result_t audioCb(AAudioStream*, void*, void* out, int32_t numFrames) {
     int16_t* dst = static_cast<int16_t*>(out);
@@ -109,6 +129,7 @@ aaudio_data_callback_result_t audioCb(AAudioStream*, void*, void* out, int32_t n
 }
 
 void audioStart(int rate) {
+    std::lock_guard<std::recursive_mutex> lk(g_streamMx);
     if (g_stream) return;
     AAudioStreamBuilder* b = nullptr;
     if (AAudio_createStreamBuilder(&b) != AAUDIO_OK) return;
@@ -130,6 +151,7 @@ void audioStart(int rate) {
 }
 
 void audioStop() {
+    std::lock_guard<std::recursive_mutex> lk(g_streamMx);
     if (!g_stream) return;
     AAudioStream_requestStop(g_stream);
     AAudioStream_close(g_stream);
@@ -139,6 +161,7 @@ void audioStop() {
 }
 
 size_t audioBatchCb(const int16_t* data, size_t frames) {
+    if (g_vlm) return frames;
     uint32_t wr = g_wr.load(std::memory_order_relaxed);
     const uint32_t rd = g_rd.load(std::memory_order_acquire);
     const uint32_t space = RING_FRAMES - (wr - rd);
@@ -150,6 +173,72 @@ size_t audioBatchCb(const int16_t* data, size_t frames) {
     }
     g_wr.store(wr + (uint32_t)n, std::memory_order_release);
     return frames;
+}
+
+// Music for VLM mode: returns how many frames were taken (0 = ring full, try later).
+// Keeps 4096 frames of history behind the read position for the VLM window.
+uint32_t vlmPush(const int16_t* data, uint32_t frames) {
+    uint32_t wr = g_wr.load(std::memory_order_relaxed);
+    const uint32_t rd = g_rd.load(std::memory_order_acquire);
+    const uint32_t used = wr - rd;
+    const uint32_t cap = RING_FRAMES - 4096;
+    const uint32_t space = used < cap ? cap - used : 0;
+    const uint32_t n = frames < space ? frames : space;
+    for (uint32_t i = 0; i < n; ++i) {
+        const uint32_t s = ((wr + i) & (RING_FRAMES - 1)) * 2;
+        g_ring[s] = data[i * 2];
+        g_ring[s + 1] = data[i * 2 + 1];
+    }
+    g_wr.store(wr + n, std::memory_order_release);
+    return n;
+}
+
+// The 128 frames that just went to the speaker.
+void vlmFeedWindow() {
+    int16_t win[256];
+    const uint32_t rd = g_rd.load(std::memory_order_acquire);
+    for (uint32_t i = 0; i < 128; ++i) {
+        const uint32_t f = rd - 128 + i;
+        const uint32_t s = (f & (RING_FRAMES - 1)) * 2;
+        const bool valid = rd >= 128;
+        win[i * 2] = valid ? g_ring[s] : 0;
+        win[i * 2 + 1] = valid ? g_ring[s + 1] : 0;
+    }
+    nuance_vlm_set_audio(win);
+}
+
+// Latest VLM frame (big-endian 32-bit YCrCb) -> RGBA texture.
+void vlmUpload() {
+    int w = 0, h = 0, stride = 0;
+    const uint8_t* src = nuance_vlm_frame(&w, &h, &stride);
+    if (!src || w <= 0 || h <= 0 || w > 360 || h > 240) return;
+    static uint8_t rgba[360 * 240 * 4];
+    uint64_t lumaSum = 0;
+    for (int y = 0; y < h; ++y) {
+        const uint8_t* p = src + (size_t)y * stride * 4;
+        uint8_t* o = rgba + (size_t)y * w * 4;
+        for (int x = 0; x < w; ++x, p += 4, o += 4) {
+            const float Y = (p[0] - 16) * (255.0f / 219.0f), Cr = p[1] - 128.0f, Cb = p[2] - 128.0f;
+            const float r = Y + 1.402f * Cr, g = Y - 0.344f * Cb - 0.714f * Cr, b = Y + 1.772f * Cb;
+            o[0] = (uint8_t)(r < 0 ? 0 : r > 255 ? 255 : r);
+            o[1] = (uint8_t)(g < 0 ? 0 : g > 255 ? 255 : g);
+            o[2] = (uint8_t)(b < 0 ? 0 : b > 255 ? 255 : b);
+            o[3] = 255;
+            lumaSum += p[0];
+        }
+    }
+    g_vlmLuma.store((int)(lumaSum / ((uint64_t)w * h)));
+    if (!g_vlmTex || w != g_vlmW || h != g_vlmH) {
+        if (!g_vlmTex) glGenTextures(1, &g_vlmTex);
+        glBindTexture(GL_TEXTURE_2D, g_vlmTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        g_vlmW = w; g_vlmH = h;
+    }
+    glBindTexture(GL_TEXTURE_2D, g_vlmTex);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
 }
 
 // ------------------------------------------------------------ libretro cb --
@@ -322,10 +411,11 @@ void blit() {
     glUseProgram(g_prog);
     glUniform1f(g_uScan, g_scanlinesPct.load() / 100.0f);
     glUniform1i(g_uFilter, g_filter.load());
-    glUniform2f(g_uTexSize, (float)FB_W, (float)FB_H);
+    const bool vlm = g_vlm && g_vlmTex;
+    glUniform2f(g_uTexSize, vlm ? (float)g_vlmW : (float)FB_W, vlm ? (float)g_vlmH : (float)FB_H);
     glUniform2f(g_uOutSize, (float)vw, (float)vh);
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, g_tex);
+    glBindTexture(GL_TEXTURE_2D, vlm ? g_vlmTex : g_tex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glBindVertexArray(0);
@@ -371,7 +461,7 @@ JNIEXPORT void JNICALL JNI(glCreated)(JNIEnv*, jobject) {
 JNIEXPORT void JNICALL JNI(glDestroyed)(JNIEnv*, jobject) {
     if (g_loaded && g_hw && g_hw->context_destroy) g_hw->context_destroy();
     g_glReady = false;
-    g_fbo = g_tex = g_prog = 0;   // died with the context
+    g_fbo = g_tex = g_prog = g_vlmTex = 0;   // died with the context
 }
 
 JNIEXPORT void JNICALL JNI(glChanged)(JNIEnv*, jobject, jint w, jint h) {
@@ -398,7 +488,7 @@ JNIEXPORT jboolean JNICALL JNI(loadGame)(JNIEnv* env, jobject, jstring path) {
     retro_system_av_info av;
     memset(&av, 0, sizeof(av));
     retro_get_system_av_info(&av);
-    audioStart(av.timing.sample_rate > 0 ? (int)av.timing.sample_rate : 32000);
+    audioStart(g_vlm ? g_audioRate.load() : av.timing.sample_rate > 0 ? (int)av.timing.sample_rate : 32000);
 
     // Libretro order: load_game, then the frontend resets the HW context.
     if (g_hw && g_hw->context_reset) g_hw->context_reset();
@@ -409,7 +499,9 @@ JNIEXPORT void JNICALL JNI(frame)(JNIEnv*, jobject) {
     if (!g_glReady) return;
     if (g_loaded && !g_paused.load()) {
         g_haveFrame = false;
+        if (g_vlm) vlmFeedWindow();
         retro_run();
+        if (g_vlm) vlmUpload();
         // The core leaves arbitrary GL state behind; blit() sets what it needs.
     }
     if (g_haveFrame || g_loaded) blit();
@@ -438,6 +530,7 @@ JNIEXPORT jfloatArray JNICALL JNI(getStats)(JNIEnv* env, jobject) {
 
 JNIEXPORT void JNICALL JNI(setPaused)(JNIEnv*, jobject, jboolean p) {
     g_paused.store(p);
+    std::lock_guard<std::recursive_mutex> lk(g_streamMx);
     if (g_stream) {
         if (p) AAudioStream_requestPause(g_stream);
         else   AAudioStream_requestStart(g_stream);
@@ -457,5 +550,39 @@ JNIEXPORT void JNICALL JNI(unload)(JNIEnv*, jobject) {
 JNIEXPORT jstring JNICALL JNI(lastError)(JNIEnv* env, jobject) {
     return env->NewStringUTF(g_lastError.c_str());
 }
+
+// ------------------------------------------------------------- VLM mode --
+// Before loadGame (with the player firmware's pe as the "game").
+JNIEXPORT void JNICALL JNI(vlmEnable)(JNIEnv*, jobject) { g_vlm = true; nuance_vlm_mode = 1; }
+
+// Any thread. Interleaved stereo 16-bit; returns frames taken (0 = full, retry shortly).
+JNIEXPORT jint JNICALL JNI(vlmPush)(JNIEnv* env, jobject, jshortArray pcm, jint offsetFrames, jint frames) {
+    jshort* p = env->GetShortArrayElements(pcm, nullptr);
+    const uint32_t n = vlmPush(p + (size_t)offsetFrames * 2, (uint32_t)frames);
+    env->ReleaseShortArrayElements(pcm, p, JNI_ABORT);
+    return (jint)n;
+}
+
+// Any thread: frames queued but not yet played; frames played since the last rate change.
+JNIEXPORT jint JNICALL JNI(vlmQueued)(JNIEnv*, jobject) { return (jint)(g_wr.load() - g_rd.load()); }
+
+// Decoder thread (the only one pushing): new sample rate for the next track. Drops what's queued.
+JNIEXPORT void JNICALL JNI(vlmSetRate)(JNIEnv*, jobject, jint rate) {
+    std::lock_guard<std::recursive_mutex> lk(g_streamMx);
+    if (rate <= 0 || rate == g_audioRate.load()) return;
+    g_audioRate.store(rate);
+    if (g_stream) { audioStop(); audioStart(rate); if (g_paused.load()) AAudioStream_requestPause(g_stream); }
+}
+
+// Decoder thread: drop queued music (skipping tracks).
+JNIEXPORT void JNICALL JNI(vlmFlush)(JNIEnv*, jobject) {
+    std::lock_guard<std::recursive_mutex> lk(g_streamMx);
+    if (g_stream) { audioStop(); audioStart(g_audioRate.load()); if (g_paused.load()) AAudioStream_requestPause(g_stream); }
+}
+
+JNIEXPORT void JNICALL JNI(vlmSetEffect)(JNIEnv*, jobject, jint n) { nuance_vlm_set_effect(n); }
+JNIEXPORT jint JNICALL JNI(vlmEffect)(JNIEnv*, jobject) { return nuance_vlm_effect(); }
+JNIEXPORT jint JNICALL JNI(vlmEffectCount)(JNIEnv*, jobject) { return nuance_vlm_effect_count(); }
+JNIEXPORT jint JNICALL JNI(vlmLuma)(JNIEnv*, jobject) { return g_vlmLuma.load(); }
 
 }  // extern "C"

@@ -20,4 +20,23 @@ object Native {
 
     /** [screen fps, game fps, NUON instruction packets per second in millions], updated once a second. */
     external fun getStats(): FloatArray
+
+    // ---- VLM mode (the player firmware's Virtual Light Machine, see VlmFirmware) ----
+    /** GL thread, before loadGame(firmware pe). */
+    external fun vlmEnable()
+    /** Music thread: interleaved stereo PCM; returns frames taken (0 = buffer full, try again shortly). */
+    external fun vlmPush(pcm: ShortArray, offsetFrames: Int, frames: Int): Int
+    /** Music thread: sample rate of what comes next. */
+    external fun vlmSetRate(rate: Int)
+    /** Music thread: drop queued music (track skipped). */
+    external fun vlmFlush()
+    /** Any thread. */
+    external fun vlmQueued(): Int
+    external fun vlmSetEffect(n: Int)
+    /** Current effect, or -1 while VLM is still starting. */
+    external fun vlmEffect(): Int
+    /** Number of effects (0 while VLM is still starting). */
+    external fun vlmEffectCount(): Int
+    /** Mean brightness of the last picture, 16 (black) .. 235. */
+    external fun vlmLuma(): Int
 }

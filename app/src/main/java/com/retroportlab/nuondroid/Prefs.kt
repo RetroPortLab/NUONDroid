@@ -70,6 +70,20 @@ class Prefs private constructor(private val file: File) {
         get() = getBool("coreCrt", false)
         set(v) = putBool("coreCrt", v)
 
+    /** Folder with music for VLM mode. */
+    var musicDir: String
+        get() = getString("musicDir", "")
+        set(v) = putString("musicDir", v)
+
+    /** VLM: effect to start with (the last one shown), and whether effects change by themselves. */
+    var vlmEffect: Int
+        get() = getInt("vlmEffect", 90)
+        set(v) = putInt("vlmEffect", v)
+
+    var vlmAuto: Boolean
+        get() = getBool("vlmAuto", true)
+        set(v) = putBool("vlmAuto", v)
+
     companion object {
         val SCANLINE_NAMES = arrayOf("Off", "Light", "Strong")
         val SCANLINE_PCT = intArrayOf(0, 30, 60)

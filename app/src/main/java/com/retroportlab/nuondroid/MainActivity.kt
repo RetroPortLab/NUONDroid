@@ -99,6 +99,7 @@ class MainActivity : Activity() {
         screen = SCREEN_LIBRARY
         val list = LinearLayout(this)
         ui.page(root, "v" + versionName(), list,
+            ui.pill("Music") { showMusic() },
             ui.pill("Games folder") { pickFolder() },
             ui.pill("Settings") { showSettings() })
 
@@ -217,6 +218,106 @@ class MainActivity : Activity() {
             .putExtra(EmulatorActivity.EXTRA_TITLE, g.title))
     }
 
+    // --------------------------------------------------------------- music --
+    /** Music (VLM): the NUON player's Virtual Light Machine, from the player's own firmware, with your music. */
+    private fun showMusic() {
+        screen = SCREEN_MUSIC
+        val list = LinearLayout(this)
+        ui.page(root, "Music", list, ui.pill("Music folder") { pickMusicFolder() }, ui.pill("Back") { showLibrary() })
+
+        if (!VlmFirmware.installed(this)) {
+            list.addView(ui.sectionTitle("Virtual Light Machine"))
+            list.addView(intro("Play your music with VLM-2, Jeff Minter's light synthesiser from the NUON DVD players. "
+                    + "NUONDroid runs the real thing from a player's firmware, which you supply once: the Samsung DVD-N501 "
+                    + "firmware update (nuon.zip, or the NUON.CD file inside it)."))
+            val r = ui.row("Install player firmware", "Pick nuon.zip or NUON.CD", null) { pickFirmware() }
+            list.addView(r)
+            r.requestFocus()
+            return
+        }
+        if (!hasStorageAccess()) {
+            val r = ui.row("Allow file access", "Needed to read your music", null) { requestStorageAccess() }
+            list.addView(r); r.requestFocus(); return
+        }
+        val folder = prefs.musicDir
+        if (folder.isEmpty()) {
+            list.addView(ui.sectionTitle("Virtual Light Machine"))
+            list.addView(intro("Choose the folder with your music (MP3, FLAC, Ogg, M4A, WAV…). "
+                    + "While it plays: A / B change the effect, X / Y pick one at random, R1 / L1 skip tracks, "
+                    + "Select + Start for the menu."))
+            val r = ui.row("Choose music folder", null, null) { pickMusicFolder() }
+            list.addView(r)
+            r.requestFocus()
+            return
+        }
+        val scanning = ui.text("Looking for music…", 15f, Ui.SUBTEXT, false).apply { setPadding(ui.dp(4f), ui.dp(16f), 0, 0) }
+        list.addView(scanning)
+        Thread {
+            val tracks = mutableListOf<File>()
+            scanMusic(File(folder), 0, tracks)
+            tracks.sortBy { it.absolutePath.lowercase(Locale.US) }
+            handler.post { if (screen == SCREEN_MUSIC && list.isAttachedToWindow) fillMusic(list, tracks, folder) }
+        }.start()
+    }
+
+    private fun scanMusic(dir: File, depth: Int, out: MutableList<File>) {
+        val entries = dir.listFiles() ?: return
+        for (f in entries) {
+            if (f.isDirectory) { if (depth < 4 && !f.name.startsWith(".")) scanMusic(f, depth + 1, out); continue }
+            if (f.extension.lowercase(Locale.US) in MusicPlayer.EXTENSIONS) out += f
+        }
+    }
+
+    private fun fillMusic(list: LinearLayout, tracks: List<File>, folder: String) {
+        list.removeAllViews()
+        if (tracks.isEmpty()) {
+            list.addView(ui.sectionTitle("No music found"))
+            list.addView(intro("$folder has no music files NUONDroid can play."))
+            val r = ui.row("Choose music folder", null, null) { pickMusicFolder() }
+            list.addView(r); r.requestFocus(); return
+        }
+        list.addView(ui.sectionTitle("Virtual Light Machine"))
+        val all = ui.row("Play all", "${tracks.size} tracks", null) { playMusic(tracks, 0) }
+        list.addView(all)
+        list.addView(ui.row("Shuffle", null, null) { playMusic(tracks.shuffled(), 0) })
+        list.addView(ui.sectionTitle("Tracks"))
+        val base = File(folder)
+        for ((i, f) in tracks.withIndex()) {
+            val rel = f.parentFile?.relativeTo(base)?.path.orEmpty()
+            list.addView(ui.row(f.nameWithoutExtension, rel.ifEmpty { null }, null) { playMusic(tracks, i) })
+        }
+        all.requestFocus()
+    }
+
+    private fun playMusic(tracks: List<File>, start: Int) {
+        startActivity(Intent(this, EmulatorActivity::class.java)
+            .putExtra(EmulatorActivity.EXTRA_VLM, true)
+            .putStringArrayListExtra(EmulatorActivity.EXTRA_TRACKS, ArrayList(tracks.map { it.absolutePath }))
+            .putExtra(EmulatorActivity.EXTRA_START, start))
+    }
+
+    private fun pickMusicFolder() {
+        try { startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), REQ_MUSIC) }
+        catch (e: Exception) { toast("No folder picker available on this device") }
+    }
+
+    private fun pickFirmware() {
+        try {
+            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), REQ_FIRMWARE)
+        } catch (e: Exception) { toast("No file picker available on this device") }
+    }
+
+    private fun installFirmware(uri: Uri) {
+        toast("Installing firmware…")
+        Thread {
+            val err = VlmFirmware.install(this, uri)
+            handler.post {
+                toast(err ?: "Player firmware installed")
+                if (screen == SCREEN_MUSIC) showMusic() else if (screen == SCREEN_SETTINGS) showSettings()
+            }
+        }.start()
+    }
+
     // ------------------------------------------------------------ settings --
     private fun showSettings() {
         screen = SCREEN_SETTINGS
@@ -229,6 +330,11 @@ class MainActivity : Activity() {
         list.addView(first)
         list.addView(ui.row("File access", if (hasStorageAccess()) "Allowed" else "Not allowed: games can't be read",
             if (hasStorageAccess()) null else "Allow") { if (!hasStorageAccess()) requestStorageAccess() })
+
+        list.addView(ui.sectionTitle("Music (VLM)"))
+        list.addView(ui.row("Player firmware", if (VlmFirmware.installed(this)) "Samsung DVD-N501 (installed)" else "Not installed: VLM needs it",
+            if (VlmFirmware.installed(this)) "Replace" else "Install") { pickFirmware() })
+        list.addView(ui.row("Music folder", prefs.musicDir.ifEmpty { "Not chosen" }, "Change") { pickMusicFolder() })
 
         list.addView(ui.sectionTitle("Display"))
         list.addView(cycleRow("Scanlines", "CRT-style lines between the picture's rows", "scanlines", Prefs.SCANLINE_NAMES))
@@ -448,7 +554,15 @@ class MainActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != REQ_FOLDER || resultCode != RESULT_OK) return
+        if (resultCode != RESULT_OK) return
+        if (requestCode == REQ_FIRMWARE) { data?.data?.let { installFirmware(it) }; return }
+        if (requestCode == REQ_MUSIC) {
+            val p = data?.data?.let { treeUriToPath(it) }
+            if (p == null) toast("Couldn't use that folder. Pick one on internal storage or an SD card.")
+            else { prefs.musicDir = p; if (screen == SCREEN_SETTINGS) showSettings() else showMusic() }
+            return
+        }
+        if (requestCode != REQ_FOLDER) return
         val path = data?.data?.let { treeUriToPath(it) }
         if (path == null) {
             toast("Couldn't use that folder. Pick one on internal storage or an SD card.")
@@ -480,7 +594,7 @@ class MainActivity : Activity() {
         }
         if (code == KeyEvent.KEYCODE_BUTTON_B || code == KeyEvent.KEYCODE_BACK) {
             if (up) when (screen) {
-                SCREEN_SETTINGS -> showLibrary()
+                SCREEN_SETTINGS, SCREEN_MUSIC -> showLibrary()
                 SCREEN_UPDATE -> { updateCancel = true; showSettings() }
                 else -> if (code == KeyEvent.KEYCODE_BACK) finish()
             }
@@ -509,7 +623,10 @@ class MainActivity : Activity() {
         private const val SCREEN_LIBRARY = 0
         private const val SCREEN_SETTINGS = 1
         private const val SCREEN_UPDATE = 2
+        private const val SCREEN_MUSIC = 3
         private const val REQ_FOLDER = 42
+        private const val REQ_MUSIC = 43
+        private const val REQ_FIRMWARE = 44
         // What the core's ResolveGameFile / loaders accept.
         private val IMAGE_EXTENSIONS = setOf("iso", "chd", "zip", "img", "mds", "mdf")
         private val LOOSE_EXTENSIONS = setOf("run", "cof", "nuon", "cd")

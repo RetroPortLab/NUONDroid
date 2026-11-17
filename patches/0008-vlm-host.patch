@@ -1,0 +1,315 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 7f19bb5..680f4d7 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -134,6 +134,7 @@ set(NUANCE_SOURCES
+     src/byteswap.cpp
+     src/coff.cpp
+     src/comm.cpp
++    src/vlmhost.cpp
+     src/CriticalSection.cpp
+     src/DecodeALU.cpp
+     src/DecodeECU.cpp
+diff --git a/src/comm.cpp b/src/comm.cpp
+index 461e469..602d433 100644
+--- a/src/comm.cpp
++++ b/src/comm.cpp
+@@ -12,6 +12,9 @@ extern uint32 vdgCLUT[];
+ FILE *commLogFile;
+ #endif
+ 
++extern "C" int nuance_vlm_mode;   // NUONDroid VLM host (vlmhost.cpp)
++void VlmComm(uint32 sender, uint32 target);
++
+ void DoCommBusController(void)
+ {
+   static uint32 currentTransmitID = 0;
+@@ -153,6 +156,9 @@ void DoCommBusController(void)
+       }
+     }
+ 
++    if(nuance_vlm_mode)
++      VlmComm(currentTransmitID, target);
++
+     nuonEnv.pendingCommRequests--;
+   }
+ 
+diff --git a/src/libretro.cpp b/src/libretro.cpp
+index c58393d..f7ea0f2 100644
+--- a/src/libretro.cpp
++++ b/src/libretro.cpp
+@@ -311,6 +311,11 @@ void retro_reset(void)
+         nuonEnv.mpe[i].Reset();
+ }
+ 
++// NUONDroid VLM host (vlmhost.cpp)
++extern "C" int nuance_vlm_mode;
++void VlmOnLoad();
++void VlmFrame();
++
+ bool retro_load_game(const struct retro_game_info *game)
+ {
+     if (!game || !game->path) return false;
+@@ -435,6 +440,7 @@ bool retro_load_game(const struct retro_game_info *game)
+     }
+     bRun = true;
+     game_loaded = true;
++    if (nuance_vlm_mode) VlmOnLoad();
+ 
+     log_printf("libretro: game loaded successfully\n");
+     return true;
+@@ -454,6 +460,7 @@ extern "C" uint64 nuance_packets_executed = 0;
+ 
+ void retro_run(void)
+ {
++    if (nuance_vlm_mode) VlmFrame();
+     if (!game_loaded) return;
+ 
+     // Input
+diff --git a/src/mpe.cpp b/src/mpe.cpp
+index 4e0fea9..f838f75 100644
+--- a/src/mpe.cpp
++++ b/src/mpe.cpp
+@@ -1851,8 +1851,13 @@ void MPE::UpdateInvalidateRegion(const uint32 start, const uint32 length)
+   if(end > interpreterInvalidateRegionEnd) interpreterInvalidateRegionEnd = end;
+ }
+ 
++extern "C" int nuance_vlm_mode;   // NUONDroid VLM host (vlmhost.cpp)
++bool VlmStep(MPE& m);
++
+ bool MPE::FetchDecodeExecute()
+ {
++  if(nuance_vlm_mode)
++    VlmStep(*this);
+   cycleCounter = 0;
+   if(mpectl & MPECTRL_MPEGO)
+   {
+diff --git a/src/vlmhost.cpp b/src/vlmhost.cpp
+new file mode 100644
+index 0000000..9cda600
+--- /dev/null
++++ b/src/vlmhost.cpp
+@@ -0,0 +1,223 @@
++// NUONDroid: VLM host.
++//
++// Runs the playback engine ("pe") of a NUON DVD player's firmware on its own and
++// drives the Virtual Light Machine (VLM-2) built into it, with music supplied by
++// the frontend. The firmware is the user's; nothing of it is part of this code.
++//
++// Verified with the Samsung DVD-N501 firmware (BIOS ROM 1.3.52.00, update of
++// 2001-07-31). The addresses below are that build's.
++//
++// The engine is started and called like the player's own shell ("target") does,
++// through pe's jump table, on MPE3 with a private stack; each call returns to a
++// halt trap. The emulator additions VLM needs, all inactive unless VLM mode is on:
++//  - comm-bus answers from the VDG, the DMA controller and the misc-IO system
++//    timers (pe drives this hardware itself instead of going through a BIOS);
++//  - the one HAL routine it uses (memcpy), since the player's HAL isn't loaded;
++//  - the video field counter VLM paces itself on (normally kept by a video
++//    interrupt that needs full VDG / DMA-controller emulation);
++//  - the 128-sample audio window VLM analyses each frame, from the frontend.
++
++#include "basetypes.h"
++#include "comm.h"
++#include "mpe.h"
++#include "NuonEnvironment.h"
++#include "NuonMemoryMap.h"
++#include <cstdint>
++#include <cstdio>
++#include <cstring>
++#include <atomic>
++
++extern NuonEnvironment nuonEnv;
++
++extern "C" {
++int nuance_vlm_mode = 0;   // set by the frontend before loading pe
++}
++
++namespace {
++
++// --- Samsung N501 pe -------------------------------------------------------
++constexpr uint32 PE_INIT        = 0x805A0000;  // returns the jump table
++constexpr uint32 PE_HALT_PACKET = 0x805A0170;  // "halt" packet, copied to the trap
++constexpr uint32 VLM_LOAD_FX    = 0x805D67BA;  // slot 301 (data, len): (0, 1) = built-in effects
++constexpr uint32 PE_MODE_PLAYER = 0x805A06B4;  // slot 285: audio player mode, ticks VLM
++constexpr uint32 VLM_ENTER      = 0x805D67E8;  // slot 258 EnterVLM
++constexpr uint32 VLM_EFFECT     = 0x805D6862;  // slot 260 VLMChangeEffect(n)
++constexpr uint32 PE_SLEEP       = 0x805FCE7E;  // sleep(ms): runs engine ticks
++constexpr uint32 PE_SLEEP_LOOP  = 0x805FCEB2;  // sleep's loop head, between engine ticks
++constexpr uint32 HAL_MEMCPY     = 0x80006160;  // HALtab entry: memcpy(src, dst, len)
++constexpr uint32 VLM_MGR        = 0x80630AD0;  // VLMMgr; +0x28 = last finished frame
++constexpr uint32 VLM_AUDIO      = 0x8062FDA0;  // 128 words L16|R16 VLM reads each frame
++constexpr uint32 VLM_EFFECT_NOW = 0x80630228;  // current effect number
++constexpr uint32 VLM_EFFECTS    = 0x80637EA4;  // number of effects
++constexpr uint32 MPE3_FIELDS    = 0x824;       // MPE3 DTRAM: video field counter VLM paces on
++
++constexpr uint32 TRAP  = 0x807FF000;
++constexpr uint32 STACK = 0x807F8000;
++
++struct Call { uint32 addr; uint32 args[2]; int nargs; };
++const Call SEQUENCE[] = {
++  { PE_INIT, {0, 0}, 0 },
++  { VLM_LOAD_FX, {0, 1}, 2 },
++  { PE_MODE_PLAYER, {0, 0}, 0 },
++  { VLM_ENTER, {0, 0}, 0 },
++};
++constexpr int SEQ_LEN = sizeof(SEQUENCE) / sizeof(SEQUENCE[0]);
++
++int g_step = -1;            // index into SEQUENCE; SEQ_LEN = running (sleep loop)
++bool g_inCall = false;
++std::atomic<int> g_wantEffect{-1};
++uint32 g_audio[128];        // host order, L16|R16
++std::atomic<bool> g_audioNew{false};
++
++inline uint8* SysPtr(uint32 a) { return nuonEnv.systemBusDRAM + (a & SYSTEM_BUS_VALID_MEMORY_MASK); }
++inline uint32 Rd32(const uint8* p) { return (uint32)p[0] << 24 | (uint32)p[1] << 16 | (uint32)p[2] << 8 | p[3]; }
++inline void Wr32(uint8* p, uint32 v) { p[0] = (uint8)(v >> 24); p[1] = (uint8)(v >> 16); p[2] = (uint8)(v >> 8); p[3] = (uint8)v; }
++
++void StartCall(uint32 addr, const uint32* args, int nargs) {
++  MPE& m = nuonEnv.mpe[3];
++  m.regs[31] = STACK;
++  m.regs[30] = STACK;
++  for (int k = 0; k < nargs; k++) m.regs[k] = args[k];
++  m.rz = TRAP;
++  m.pcexec = addr;
++  m.pcfetchnext = addr;
++  m.excepsrc &= ~1u;
++  m.ecuSkipCounter = 0;
++  m.mpectl |= MPECTRL_MPEGO;
++  nuonEnv.bProcessorStartStopChange = true;
++  g_inCall = true;
++}
++
++void StartSleep() {
++  const uint32 ms = 0x00FFFFFF;
++  StartCall(PE_SLEEP, &ms, 1);
++}
++
++}  // namespace
++
++// Called once the pe COFF is loaded (VLM mode only).
++void VlmOnLoad() {
++  // Return trap: the firmware's own halt packet.
++  uint8* trap = (uint8*)nuonEnv.GetPointerToMemory(3, TRAP, false);
++  const uint8* halt = (const uint8*)nuonEnv.GetPointerToMemory(3, PE_HALT_PACKET, false);
++  memcpy(trap, halt, 8);
++  g_step = 0;
++  StartCall(SEQUENCE[0].addr, SEQUENCE[0].args, SEQUENCE[0].nargs);
++}
++
++// Once per emulated video frame, before the MPEs run.
++void VlmFrame() {
++  if (g_step < 0) return;
++  MPE& m = nuonEnv.mpe[3];
++
++  // Field counter.
++  uint8* f = nuonEnv.mpe[3].dtrom + MPE_DTRAM_OFFSET + MPE3_FIELDS;
++  Wr32(f, Rd32(f) + 1);
++
++  // Audio window.
++  if (g_audioNew.exchange(false)) {
++    uint8* q = SysPtr(VLM_AUDIO);
++    for (int i = 0; i < 128; i++) Wr32(q + i * 4, g_audio[i]);
++  }
++
++  // Call sequence: the next call starts once the previous one hit the trap.
++  if (g_inCall && !(m.mpectl & MPECTRL_MPEGO)) {
++    g_inCall = false;
++    if (g_step < SEQ_LEN) g_step++;
++  }
++  if (!g_inCall) {
++    if (g_step < SEQ_LEN) StartCall(SEQUENCE[g_step].addr, SEQUENCE[g_step].args, SEQUENCE[g_step].nargs);
++    else StartSleep();
++  }
++}
++
++// Called at the top of every MPE step. Returns true if it changed pcexec.
++bool VlmStep(MPE& m) {
++  if (m.mpeIndex != 3) return false;
++  if (m.pcexec == HAL_MEMCPY) {
++    const uint32 src = m.regs[0], dst = m.regs[1], len = m.regs[2];
++    for (uint32 k = 0; k < len; k++) {
++      const uint8* s = (const uint8*)nuonEnv.GetPointerToMemory(3, src + k, false);
++      uint8* d = (uint8*)nuonEnv.GetPointerToMemory(3, dst + k, false);
++      if (s && d) *d = *s;
++    }
++    m.pcexec = m.pcfetchnext = m.rz;
++    return true;
++  }
++  // Between engine ticks in the idle sleep: slip in a pending effect change as
++  // a call that returns to the same spot.
++  if (m.pcexec == PE_SLEEP_LOOP && g_step >= SEQ_LEN) {
++    const int e = g_wantEffect.exchange(-1);
++    if (e >= 0) {
++      m.regs[0] = (uint32)e;
++      m.rz = PE_SLEEP_LOOP;
++      m.pcexec = m.pcfetchnext = VLM_EFFECT;
++      return true;
++    }
++  }
++  return false;
++}
++
++// Comm packet to a hardware device (target >= 64): answer the way the hardware does.
++void VlmComm(uint32 sender, uint32 target) {
++  MPE& snd = nuonEnv.mpe[sender];
++  const uint32* x = snd.commxmit;
++  static uint32 vdgRegs[0x10000];
++  static uint32 timerPre = 54;
++  bool reply = false;
++  uint32 r[4] = {0, 0, 0, 0};
++  if (target == COMM_ID_VDG) {
++    if (x[0] & 0x80000000U) vdgRegs[x[0] & 0xFFFFU] = x[1];                                         // mode 1 write
++    else if (x[0] & 0x40000000U) { for (int k = 0; k < 4; k++) vdgRegs[(x[k] >> 24) & 0x3FU] = x[k] & 0xFFFFFFU; } // mode 2
++    else { r[1] = vdgRegs[x[0] & 0xFFFFU]; reply = true; }                                          // read
++  } else if (target == 0x45) {   // misc IO: reg 0 timer prescale, regs 1-2 system timers 0-1; 54 MHz clock
++    if (x[0] & 0x80000000U) {
++      const uint32 reg = x[0] & 0xFFFFU, v = x[1];
++      if (reg == 0) timerPre = v & 0xFF;
++      else if (reg == 1 || reg == 2) {
++        const uint32 n = v & 0xFFFFF;
++        const double us = (double)(timerPre + 1) * (double)n / 54.0;
++        nuonEnv.timer_rate[reg - 1] = n ? (int32)(us < 1.0 ? 1.0 : us) : -1;
++      }
++    } else if (!(x[0] & 0x40000000U)) reply = true;
++  } else if (target == 0x47) {   // DMA controller: the firmware only waits for an answer
++    reply = true;
++  }
++  if (reply && !(snd.commctl & COMM_RECV_BUFFER_FULL_BIT)) {
++    for (int k = 0; k < 4; k++) snd.commrecv[k] = r[k];
++    snd.commctl &= ~(COMM_SOURCE_ID_BITS);
++    snd.commctl |= (COMM_RECV_BUFFER_FULL_BIT | (target << 16));
++    snd.TriggerInterrupt(INT_COMMRECV);
++  }
++}
++
++// ---------------------------------------------------------------- frontend --
++extern "C" {
++
++// 128 stereo frames of the music now playing, interleaved L,R.
++void nuance_vlm_set_audio(const int16_t* lr) {
++  for (int i = 0; i < 128; i++) g_audio[i] = (uint32)(uint16_t)lr[i * 2] << 16 | (uint16_t)lr[i * 2 + 1];
++  g_audioNew.store(true);
++}
++
++void nuance_vlm_set_effect(int n) { if (n >= 0) g_wantEffect.store(n); }
++
++int nuance_vlm_effect(void) { return g_step >= SEQ_LEN ? (int)Rd32(SysPtr(VLM_EFFECT_NOW)) : -1; }
++
++int nuance_vlm_effect_count(void) {
++  if (g_step < SEQ_LEN) return 0;
++  const uint32 n = Rd32(SysPtr(VLM_EFFECTS));
++  return n > 0 && n < 1024 ? (int)n : 0;
++}
++
++// The last finished VLM frame: 32-bit big-endian YCrCb pixels, stride 360,
++// picture in the top-left w x h. Null until VLM is running.
++const uint8_t* nuance_vlm_frame(int* w, int* h, int* stride) {
++  if (g_step < SEQ_LEN) return nullptr;
++  const uint32 a = Rd32(SysPtr(VLM_MGR + 0x28));
++  if ((a >> 24) != 0x40) return nullptr;
++  *w = 180; *h = 120; *stride = 360;
++  return nuonEnv.mainBusDRAM + (a & MAIN_BUS_VALID_MEMORY_MASK);
++}
++
++}  // extern "C"

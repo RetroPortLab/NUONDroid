@@ -78,6 +78,36 @@ ones from the upstream repo and are bundled into the APK at build time.
 | Start / Select | Start / NUON button |
 | Select + Start | In-game menu |
 
+## Music (VLM)
+
+NUONDroid can play your music with **VLM-2**, the Virtual Light Machine Jeff Minter
+wrote for the NUON DVD players - the real one, run from a player's own firmware, like
+JagDroid's music mode runs the Jaguar CD BIOS. The firmware isn't included: you
+install it once from the **Samsung DVD-N501 firmware update** (`nuon.zip`, or the
+`NUON/NUON.CD` file inside it, BIOS 1.3.52 from 2001).
+
+1. **Music** (on the library screen) → **Install player firmware** → pick `nuon.zip` or `NUON.CD`.
+   NUONDroid takes the playback engine (`pe`) out of the update and keeps an unpacked copy.
+2. **Choose music folder**. Anything Android can decode plays: MP3, FLAC, Ogg/Opus, M4A/AAC, WAV.
+3. **Play all**, **Shuffle**, or pick a track.
+
+| Button | VLM |
+|---|---|
+| A / B (or d-pad right / left) | Next / previous effect |
+| X / Y | Random effect |
+| R1 / L1 (or d-pad down / up) | Next / previous track |
+| L2 / R2 | Effects change by themselves: on / off |
+| Select + Start, Back | Menu |
+
+How it works: the core loads the player's `pe` like a program and calls into it the way
+the player's own menu shell does - init, load the built-in effects (152), switch to the
+audio player, EnterVLM, VLMChangeEffect - on MPE3, with VLM's renderer running on MPE2.
+The music is decoded on the Android side, played through AAudio, and the last 128
+played samples are written each frame where VLM reads its audio. VLM draws 180×120
+frames (the player scaled them up too) at about 20 fps. Effects that stay black with
+your music are skipped. See `patches/0008` and `src/vlmhost.cpp` for what the
+emulator adds for it.
+
 ## Performance: read this first
 
 NUON is an unusual 4-core VLIW machine, and this core is CPU-bound. On x86-64 it uses
@@ -133,6 +163,11 @@ idempotent):
 - `0007` exports two counters for the FPS overlay: `nuance_video_flips` (bumped when
   the game points the main video channel at a new frame via VidChangeBase/VidConfig)
   and `nuance_packets_executed`.
+- `0008` adds the VLM host (`src/vlmhost.cpp`): with `nuance_vlm_mode` set it runs a NUON
+  player's playback engine on its own and drives VLM-2 through it. It also adds what that
+  firmware needs and the HLE BIOS doesn't provide - comm-bus answers from the VDG, DMA
+  controller and misc-IO system timers, the HAL memcpy, and the video field counter.
+  Nothing changes for games (everything is behind the flag).
 
 ## Licence
 

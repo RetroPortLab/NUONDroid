@@ -17,8 +17,8 @@ android {
         minSdk = 26          // AAudio
         targetSdk = 34
         // Same scheme as JagDroid: v0.01 -> versionCode 1, v0.02 -> 2 ...
-        versionCode = 6
-        versionName = "0.06-experimental"
+        versionCode = 7
+        versionName = "0.07-experimental"
 
         // The core's execution engine on non-x86 is the IL interpreter, and the
         // Retroid handhelds are all arm64. (x86_64 would additionally need the
@@ -95,12 +95,21 @@ tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(copyBios) }
 // Small fixes to upstream that the Android build needs, kept as patches so the
 // submodule stays a pristine checkout of andkrau/NuanceResurrection.
 val applyPatches = tasks.register<Exec>("applyNuancePatches") {
+    // The submodule is build-owned: when the patch series changes, start it from
+    // upstream's commit again and apply every patch in order. A stamp remembers
+    // which series is applied (patches overlap, so they can't be checked one by one).
     workingDir = nuanceDir
+    val patchDir = rootProject.file("patches").absolutePath
+    val stamp = layout.buildDirectory.file("nuance-patches.stamp").get().asFile.absolutePath
     commandLine("bash", "-c", """
-        for p in ${rootProject.file("patches").absolutePath}/*.patch; do
-            if git apply --reverse --check "${'$'}p" >/dev/null 2>&1; then continue; fi   # already applied
-            git apply "${'$'}p"
-        done
+        set -e
+        sum=${'$'}(cat "$patchDir"/*.patch | sha256sum | cut -d' ' -f1)
+        if [ -f "$stamp" ] && [ "${'$'}(cat "$stamp")" = "${'$'}sum" ] && git apply --reverse --check "${'$'}(ls "$patchDir"/*.patch | tail -1)" >/dev/null 2>&1; then exit 0; fi
+        git reset -q --hard
+        git clean -fdq
+        for p in "$patchDir"/*.patch; do git apply "${'$'}p"; done
+        mkdir -p "${'$'}(dirname "$stamp")"
+        echo "${'$'}sum" > "$stamp"
     """.trimIndent())
 }
 tasks.matching { it.name.startsWith("configureCMake") || it.name.startsWith("buildCMake") }
@@ -108,4 +117,5 @@ tasks.matching { it.name.startsWith("configureCMake") || it.name.startsWith("bui
 
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
+    testImplementation("junit:junit:4.13.2")
 }
