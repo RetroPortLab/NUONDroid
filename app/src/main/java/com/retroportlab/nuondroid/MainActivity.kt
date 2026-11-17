@@ -408,6 +408,13 @@ class MainActivity : Activity() {
             ui.setRowValue(tvRow, if (prefs.tvOnly) "TV only" else "Both")
         }
         list.addView(tvRow)
+        lateinit var resRow: View
+        resRow = ui.row("TV resolution", "With TV only: the size the picture is drawn at for the TV. Lower is smoother over a cast; NUON games are 480 lines.",
+            Prefs.TV_RES_NAMES[prefs.tvRes]) {
+            prefs.tvRes = (prefs.tvRes + 1) % Prefs.TV_RES_NAMES.size
+            ui.setRowValue(resRow, Prefs.TV_RES_NAMES[prefs.tvRes])
+        }
+        list.addView(resRow)
 
         list.addView(ui.sectionTitle("Display"))
         list.addView(cycleRow("Scanlines", "CRT-style lines between the picture's rows", "scanlines", Prefs.SCANLINE_NAMES))

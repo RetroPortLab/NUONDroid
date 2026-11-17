@@ -94,6 +94,11 @@ class Prefs private constructor(private val file: File) {
         get() = getInt("trackName", 1).coerceIn(0, TRACK_NAMES.size - 1)
         set(v) = putInt("trackName", v)
 
+    /** Picture size drawn for a TV (cast or cable). Index into [TV_RES_NAMES]. */
+    var tvRes: Int
+        get() = getInt("tvRes", 0).coerceIn(0, TV_RES_NAMES.size - 1)
+        set(v) = putInt("tvRes", v)
+
     /** While casting to a TV: true = picture on the TV only, handheld screen dark. */
     var tvOnly: Boolean
         get() = getBool("tvOnly", true)
@@ -101,6 +106,8 @@ class Prefs private constructor(private val file: File) {
 
     companion object {
         val SCANLINE_NAMES = arrayOf("Off", "Light", "Strong")
+        val TV_RES_NAMES = arrayOf("480p (NUON's own)", "720p", "1080p", "The TV's own")
+        val TV_RES_LINES = intArrayOf(480, 720, 1080, 0)
         val TRACK_NAMES = arrayOf("Off", "When the track changes", "Always")
         val SCANLINE_PCT = intArrayOf(0, 30, 60)
         val SCREEN_NAMES = arrayOf("4:3", "Stretch")

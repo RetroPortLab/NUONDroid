@@ -196,19 +196,17 @@ class EmulatorActivity : Activity() {
             // Draw at the NUON's own 480 lines (widened to the TV's shape) and let the
             // display hardware scale up: there's no more detail to show, and the
             // handheld has less to draw while it also encodes the cast stream.
-            val mode = want.mode
-            val tvW = maxOf(mode.physicalWidth, mode.physicalHeight)
-            val tvH = minOf(mode.physicalWidth, mode.physicalHeight)
-            if (tvH > 480) glView.holder.setFixedSize((480 * tvW / tvH + 1) and 1.inv(), 480)
+            tvDisplay = want
+            applyTvRes()
             tvRoot.addView(glView, FrameLayout.LayoutParams(-1, -1))
-            moveTrackView(tvRoot)      // the track name goes with the picture
+            moveOverlays(tvRoot)       // track name and effect messages go with the picture
             p.setContentView(tvRoot)
             p.setOnDismissListener { uiHandler.post { updateTv() } }
             try {
                 p.show()
                 presentation = p
             } catch (e: WindowManager.InvalidDisplayException) {
-                moveTrackView(root)
+                moveOverlays(root)
                 (glView.parent as? ViewGroup)?.removeView(glView)
                 glView = newGlView(this)
                 root.addView(glView, 0, FrameLayout.LayoutParams(-1, -1))
@@ -216,7 +214,7 @@ class EmulatorActivity : Activity() {
         } else {
             glView = newGlView(this)
             root.addView(glView, 0, FrameLayout.LayoutParams(-1, -1))
-            moveTrackView(root)
+            moveOverlays(root)
         }
         val onTv = presentation != null
         currentTvId = presentation?.display?.displayId
@@ -229,12 +227,44 @@ class EmulatorActivity : Activity() {
         if (!menuOpen) glView.onResume()
     }
 
-    private fun moveTrackView(to: FrameLayout) {
-        if (trackView.parent === to) return
-        (trackView.parent as? ViewGroup)?.removeView(trackView)
-        to.addView(trackView, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.END).apply {
-            rightMargin = ui.dp(16f); bottomMargin = ui.dp(16f)
-        })
+    private var tvDisplay: android.view.Display? = null
+
+    /**
+     * Picture size on the TV (the "TV resolution" option). Fewer lines = less to draw and
+     * to encode for a cast; the display scales it up. The default is the NUON's own 480
+     * lines, as there's no more detail in the picture. Never more than the TV has.
+     */
+    private fun applyTvRes() {
+        val d = tvDisplay ?: return
+        if (presentation == null && glView.context === this) return
+        val mode = d.mode
+        val tvW = maxOf(mode.physicalWidth, mode.physicalHeight)
+        val tvH = minOf(mode.physicalWidth, mode.physicalHeight)
+        val lines = Prefs.TV_RES_LINES[prefs.tvRes]
+        if (lines in 1 until tvH) glView.holder.setFixedSize((lines * tvW / tvH + 1) and 1.inv(), lines)
+        else glView.holder.setSizeFromLayout()
+    }
+
+    private fun cycleTvRes(): String {
+        prefs.tvRes = (prefs.tvRes + 1) % Prefs.TV_RES_NAMES.size
+        applyTvRes()
+        return Prefs.TV_RES_NAMES[prefs.tvRes]
+    }
+
+    /** The on-screen messages follow the picture (to the TV and back). */
+    private fun moveOverlays(to: FrameLayout) {
+        if (trackView.parent !== to) {
+            (trackView.parent as? ViewGroup)?.removeView(trackView)
+            to.addView(trackView, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.END).apply {
+                rightMargin = ui.dp(16f); bottomMargin = ui.dp(16f)
+            })
+        }
+        if (infoView.parent !== to) {
+            (infoView.parent as? ViewGroup)?.removeView(infoView)
+            to.addView(infoView, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.START).apply {
+                leftMargin = ui.dp(16f); bottomMargin = ui.dp(16f)
+            })
+        }
     }
 
     private inner class Renderer : GLSurfaceView.Renderer {
@@ -385,7 +415,8 @@ class EmulatorActivity : Activity() {
         Native.vlmSetEffect(effect)
         dark = 0
         lastChange = System.currentTimeMillis()
-        if (announce) showInfo("Effect ${effect + 1} of $count")
+        // On a TV nobody's looking at the handheld, so say every change there, briefly.
+        if (announce || presentation != null) showInfo("Effect ${effect + 1} of $count")
     }
 
     private fun stepEffect(dir: Int) { effectDir = dir; setEffect(effect + dir, true) }
@@ -565,6 +596,11 @@ class EmulatorActivity : Activity() {
             updateTv()
         }
         panel.addView(tvRow)
+        lateinit var resRow: View
+        resRow = ui.row("TV resolution", "Lower is smoother over a cast", Prefs.TV_RES_NAMES[prefs.tvRes]) {
+            ui.setRowValue(resRow, cycleTvRes())
+        }
+        panel.addView(resRow)
         panel.addView(ui.row(if (vlm) "Stop music" else "Quit to library", null, null) { finish() })
 
         val sv = ScrollView(this).apply { addView(panel, FrameLayout.LayoutParams(ui.dp(360f), -2)) }

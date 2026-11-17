@@ -93,10 +93,14 @@ The picture moves between screens without restarting anything: the emulator keep
 one GL context and hands it from the handheld's view to the TV's.
 
 Over a wireless cast, the TV picture is drawn at 480 lines (the NUON's own
-resolution) instead of the TV's full resolution, and the frame rate is held at a
+resolution) instead of the TV's full resolution (*TV resolution* in Settings or the
+menu: 480p, 720p, 1080p or the TV's own), and the frame rate is held at a
 steady 30 fps: each drawn frame carries two 60 Hz fields, so games run at full speed.
 Wireless cast streams are 30 fps at best, so this saves encoding work without
 losing anything. A TV on a cable keeps 60 fps.
+
+With TV only, on-screen messages (effect changes, track names) show on the TV. In
+Music, every effect change is shown there briefly, including automatic ones.
 
 ## Music (VLM)
 
