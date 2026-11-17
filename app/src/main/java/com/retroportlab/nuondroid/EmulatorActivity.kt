@@ -5,6 +5,7 @@ import android.view.ViewGroup
 import android.view.Display
 import android.hardware.display.DisplayManager
 import android.content.Context
+import android.content.Intent
 import android.app.Presentation
 import android.opengl.EGL14
 import android.opengl.GLSurfaceView
@@ -57,6 +58,8 @@ class EmulatorActivity : Activity() {
     // VLM mode: the player firmware's light show, driven by the user's music.
     private var vlm = false
     private var music: MusicPlayer? = null
+    private var live: LiveAudio? = null       // music from another app (Spotify…) instead of files
+    private var liveMode = false
     private var tracks: List<File> = emptyList()
     private var effect = -1               // effect we asked for
     private var dark = 0                  // consecutive half-seconds of black picture
@@ -77,8 +80,9 @@ class EmulatorActivity : Activity() {
         ui = Ui(this)
         vlm = intent.getBooleanExtra(EXTRA_VLM, false)
         if (vlm) {
+            liveMode = intent.getBooleanExtra(EXTRA_LIVE, false)
             tracks = (intent.getStringArrayListExtra(EXTRA_TRACKS) ?: arrayListOf()).map { File(it) }
-            if (tracks.isEmpty() || !VlmFirmware.installed(this)) { finish(); return }
+            if ((tracks.isEmpty() && !liveMode) || !VlmFirmware.installed(this)) { finish(); return }
             gamePath = VlmFirmware.file(this).absolutePath
             gameTitle = "Music (VLM)"
         } else {
@@ -275,12 +279,34 @@ class EmulatorActivity : Activity() {
 
     // ------------------------------------------------------------ VLM mode --
     private fun startMusic() {
-        if (music != null) return
+        if (music != null || live != null) return
+        if (liveMode) { startLive(); return }
         val start = intent.getIntExtra(EXTRA_START, 0).coerceIn(0, tracks.size - 1)
         music = MusicPlayer(tracks, start) { _, f -> runOnUiThread { showInfo("\u266A  " + f.nameWithoutExtension) } }
             .also { it.start() }
         lastChange = System.currentTimeMillis()
         uiHandler.post(vlmWatcher)
+    }
+
+    /** Music from another app: capture it if the user allowed screen capture, else the Visualizer. */
+    private fun startLive() {
+        val l = LiveAudio(this) { msg -> runOnUiThread { showInfo(msg) } }
+        live = l
+        lastChange = System.currentTimeMillis()
+        uiHandler.post(vlmWatcher)
+        val data: Intent? = if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(EXTRA_PROJ_DATA, Intent::class.java)
+            else @Suppress("DEPRECATION") intent.getParcelableExtra(EXTRA_PROJ_DATA)
+        val code = intent.getIntExtra(EXTRA_PROJ_CODE, 0)
+        if (data != null) CaptureService.start(this, code, data) { p -> if (live === l) l.start(p) }
+        else l.start(null)
+    }
+
+    private fun nextTrack() { music?.next(); live?.mediaKey(KeyEvent.KEYCODE_MEDIA_NEXT) }
+    private fun previousTrack() { music?.previous(); live?.mediaKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS) }
+
+    private fun stopLive() {
+        live?.stop(); live = null
+        CaptureService.stop(this)
     }
 
     private fun effectCount() = Native.vlmEffectCount()
@@ -333,8 +359,8 @@ class EmulatorActivity : Activity() {
             KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_DPAD_RIGHT -> { { stepEffect(1) } }
             KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_DPAD_LEFT -> { { stepEffect(-1) } }
             KeyEvent.KEYCODE_BUTTON_X, KeyEvent.KEYCODE_BUTTON_Y -> { { randomEffect() } }
-            KeyEvent.KEYCODE_BUTTON_R1, KeyEvent.KEYCODE_DPAD_DOWN -> { { music?.next() } }
-            KeyEvent.KEYCODE_BUTTON_L1, KeyEvent.KEYCODE_DPAD_UP -> { { music?.previous() } }
+            KeyEvent.KEYCODE_BUTTON_R1, KeyEvent.KEYCODE_DPAD_DOWN -> { { nextTrack() } }
+            KeyEvent.KEYCODE_BUTTON_L1, KeyEvent.KEYCODE_DPAD_UP -> { { previousTrack() } }
             KeyEvent.KEYCODE_BUTTON_R2, KeyEvent.KEYCODE_BUTTON_L2 -> { {
                 prefs.vlmAuto = !prefs.vlmAuto
                 lastChange = System.currentTimeMillis()
@@ -367,7 +393,7 @@ class EmulatorActivity : Activity() {
         val resume = ui.row("Resume", null, null) { closePauseMenu() }
         panel.addView(resume)
         if (vlm) {
-            panel.addView(ui.row("Next track", null, null) { music?.next(); closePauseMenu() })
+            panel.addView(ui.row("Next track", null, null) { nextTrack(); closePauseMenu() })
             panel.addView(ui.row("Next effect", null, null) { closePauseMenu(); stepEffect(1) })
             lateinit var autoRow: View
             autoRow = ui.row("Change effects by themselves", null, if (prefs.vlmAuto) "On" else "Off") {
@@ -518,7 +544,7 @@ class EmulatorActivity : Activity() {
         uiHandler.removeCallbacks(fpsUpdater)
         Native.setPaused(true)
         Native.setInput(0)
-        if (isFinishing) music?.stop()
+        if (isFinishing) { music?.stop(); stopLive() }
         if (isFinishing) glView.queueEvent { Native.unload() }   // runs on the GL thread, before it pauses
         glView.onPause()
         super.onPause()
@@ -528,6 +554,7 @@ class EmulatorActivity : Activity() {
         presentation?.let { runCatching { it.dismiss() } }
         if (effect >= 0) prefs.vlmEffect = effect
         music?.stop()
+        stopLive()
         uiHandler.removeCallbacks(vlmWatcher)
         super.onDestroy()
         // Fresh process per game: unload already ran on the GL thread in onPause.
@@ -553,6 +580,9 @@ class EmulatorActivity : Activity() {
         const val EXTRA_VLM = "vlm"
         const val EXTRA_TRACKS = "tracks"
         const val EXTRA_START = "start"
+        const val EXTRA_LIVE = "live"
+        const val EXTRA_PROJ_CODE = "projCode"
+        const val EXTRA_PROJ_DATA = "projData"
         private const val AUTO_MS = 45_000L
     }
 }

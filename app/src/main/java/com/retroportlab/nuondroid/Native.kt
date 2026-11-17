@@ -36,6 +36,8 @@ object Native {
     external fun vlmFlush()
     /** Any thread. */
     external fun vlmQueued(): Int
+    /** Live input: music another app is playing. VLM sees it; it isn't played again. */
+    external fun vlmSetLive(on: Boolean)
     external fun vlmSetEffect(n: Int)
     /** Current effect, or -1 while VLM is still starting. */
     external fun vlmEffect(): Int

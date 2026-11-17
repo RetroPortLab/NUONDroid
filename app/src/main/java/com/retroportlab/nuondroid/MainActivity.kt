@@ -235,28 +235,35 @@ class MainActivity : Activity() {
             r.requestFocus()
             return
         }
+        list.addView(ui.sectionTitle("From Spotify and other apps"))
+        val spotify = packageManager.getLaunchIntentForPackage(SPOTIFY)
+        list.addView(ui.row("Play along with another app", "Start your music in Spotify (or any app), then pick this", null) { startLive() })
+        if (spotify != null) list.addView(ui.row("Open Spotify", null, null) { runCatching { startActivity(spotify) } })
+        list.getChildAt(1).requestFocus()
+        list.addView(ui.sectionTitle("Your music files"))
+        val files = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        list.addView(files, LinearLayout.LayoutParams(-1, -2))
         if (!hasStorageAccess()) {
             val r = ui.row("Allow file access", "Needed to read your music", null) { requestStorageAccess() }
-            list.addView(r); r.requestFocus(); return
+            files.addView(r); r.requestFocus(); return
         }
         val folder = prefs.musicDir
         if (folder.isEmpty()) {
-            list.addView(ui.sectionTitle("Virtual Light Machine"))
-            list.addView(intro("Choose the folder with your music (MP3, FLAC, Ogg, M4A, WAV…). "
+            files.addView(intro("Choose the folder with your music (MP3, FLAC, Ogg, M4A, WAV…). "
                     + "While it plays: A / B change the effect, X / Y pick one at random, R1 / L1 skip tracks, "
                     + "Select + Start for the menu."))
             val r = ui.row("Choose music folder", null, null) { pickMusicFolder() }
-            list.addView(r)
+            files.addView(r)
             r.requestFocus()
             return
         }
         val scanning = ui.text("Looking for music…", 15f, Ui.SUBTEXT, false).apply { setPadding(ui.dp(4f), ui.dp(16f), 0, 0) }
-        list.addView(scanning)
+        files.addView(scanning)
         Thread {
             val tracks = mutableListOf<File>()
             scanMusic(File(folder), 0, tracks)
             tracks.sortBy { it.absolutePath.lowercase(Locale.US) }
-            handler.post { if (screen == SCREEN_MUSIC && list.isAttachedToWindow) fillMusic(list, tracks, folder) }
+            handler.post { if (screen == SCREEN_MUSIC && files.isAttachedToWindow) fillMusic(files, tracks, folder) }
         }.start()
     }
 
@@ -276,7 +283,6 @@ class MainActivity : Activity() {
             val r = ui.row("Choose music folder", null, null) { pickMusicFolder() }
             list.addView(r); r.requestFocus(); return
         }
-        list.addView(ui.sectionTitle("Virtual Light Machine"))
         val all = ui.row("Play all", "${tracks.size} tracks", null) { playMusic(tracks, 0) }
         list.addView(all)
         list.addView(ui.row("Shuffle", null, null) { playMusic(tracks.shuffled(), 0) })
@@ -294,6 +300,45 @@ class MainActivity : Activity() {
             .putExtra(EmulatorActivity.EXTRA_VLM, true)
             .putStringArrayListExtra(EmulatorActivity.EXTRA_TRACKS, ArrayList(tracks.map { it.absolutePath }))
             .putExtra(EmulatorActivity.EXTRA_START, start))
+    }
+
+    /**
+     * Music from another app. NUONDroid needs the microphone permission (Android puts
+     * hearing other apps' audio under it; nothing is recorded from the microphone)
+     * and, for the best sound, screen-capture consent, which is how Android lets an
+     * app hear other apps' audio. Declining capture still works, more coarsely.
+     */
+    private fun startLive() {
+        if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            val want = mutableListOf(android.Manifest.permission.RECORD_AUDIO)
+            if (Build.VERSION.SDK_INT >= 33) want += android.Manifest.permission.POST_NOTIFICATIONS
+            requestPermissions(want.toTypedArray(), REQ_AUDIO)
+            return
+        }
+        if (Build.VERSION.SDK_INT >= 29) {
+            val mpm = getSystemService(android.media.projection.MediaProjectionManager::class.java)
+            val i = if (Build.VERSION.SDK_INT >= 34)
+                mpm.createScreenCaptureIntent(android.media.projection.MediaProjectionConfig.createConfigForDefaultDisplay())
+            else mpm.createScreenCaptureIntent()
+            try { startActivityForResult(i, REQ_CAPTURE); return } catch (e: Exception) { }
+        }
+        launchLive(0, null)
+    }
+
+    private fun launchLive(code: Int, data: Intent?) {
+        val i = Intent(this, EmulatorActivity::class.java)
+            .putExtra(EmulatorActivity.EXTRA_VLM, true)
+            .putExtra(EmulatorActivity.EXTRA_LIVE, true)
+        if (data != null && code == RESULT_OK) i.putExtra(EmulatorActivity.EXTRA_PROJ_CODE, code).putExtra(EmulatorActivity.EXTRA_PROJ_DATA, data)
+        startActivity(i)
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQ_AUDIO) return
+        val i = permissions.indexOf(android.Manifest.permission.RECORD_AUDIO)
+        if (i >= 0 && grantResults.getOrNull(i) == PackageManager.PERMISSION_GRANTED) startLive()
+        else toast("NUONDroid needs this to hear the music other apps play")
     }
 
     private fun pickMusicFolder() {
@@ -566,6 +611,7 @@ class MainActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQ_CAPTURE) { launchLive(resultCode, data); return }
         if (resultCode != RESULT_OK) return
         if (requestCode == REQ_FIRMWARE) { data?.data?.let { installFirmware(it) }; return }
         if (requestCode == REQ_MUSIC) {
@@ -639,6 +685,9 @@ class MainActivity : Activity() {
         private const val REQ_FOLDER = 42
         private const val REQ_MUSIC = 43
         private const val REQ_FIRMWARE = 44
+        private const val REQ_AUDIO = 45
+        private const val REQ_CAPTURE = 46
+        private const val SPOTIFY = "com.spotify.music"
         // What the core's ResolveGameFile / loaders accept.
         private val IMAGE_EXTENSIONS = setOf("iso", "chd", "zip", "img", "mds", "mdf")
         private val LOOSE_EXTENSIONS = setOf("run", "cof", "nuon", "cd")

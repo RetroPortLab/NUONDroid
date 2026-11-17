@@ -116,11 +116,17 @@ std::atomic<uint32_t> g_wr{0}, g_rd{0};               // monotonic frame counter
 AAudioStream* g_stream = nullptr;
 std::recursive_mutex g_streamMx;   // stream open/close/pause from the GL, UI and decoder threads
 
+// Live VLM input (music another app is playing): VLM sees it, but it isn't played
+// again here, and a backlog is skipped so the picture stays in time with the speaker.
+std::atomic<bool> g_vlmLive{false};
+
 aaudio_data_callback_result_t audioCb(AAudioStream*, void*, void* out, int32_t numFrames) {
     int16_t* dst = static_cast<int16_t*>(out);
     uint32_t rd = g_rd.load(std::memory_order_relaxed);
     const uint32_t wr = g_wr.load(std::memory_order_acquire);
     uint32_t avail = wr - rd;
+    const bool live = g_vlmLive.load(std::memory_order_relaxed);
+    if (live && avail > (uint32_t)numFrames + 2048) { rd += avail - (uint32_t)numFrames - 1024; avail = wr - rd; }
     uint32_t n = avail < (uint32_t)numFrames ? avail : (uint32_t)numFrames;
     for (uint32_t i = 0; i < n; ++i) {
         const uint32_t s = ((rd + i) & (RING_FRAMES - 1)) * 2;
@@ -128,6 +134,7 @@ aaudio_data_callback_result_t audioCb(AAudioStream*, void*, void* out, int32_t n
         dst[i * 2 + 1] = g_ring[s + 1];
     }
     if (n < (uint32_t)numFrames) memset(dst + n * 2, 0, (numFrames - n) * 2 * sizeof(int16_t));  // underrun: silence
+    if (live) memset(dst, 0, (size_t)numFrames * 2 * sizeof(int16_t));
     g_rd.store(rd + n, std::memory_order_release);
     return AAUDIO_CALLBACK_RESULT_CONTINUE;
 }
@@ -645,7 +652,9 @@ JNIEXPORT jint JNICALL JNI(vlmPush)(JNIEnv* env, jobject, jshortArray pcm, jint 
     return (jint)n;
 }
 
-// Any thread: frames queued but not yet played; frames played since the last rate change.
+// Any thread: live input on/off (see g_vlmLive).
+JNIEXPORT void JNICALL JNI(vlmSetLive)(JNIEnv*, jobject, jboolean on) { g_vlmLive.store(on); }
+// Any thread: frames queued but not yet played.
 JNIEXPORT jint JNICALL JNI(vlmQueued)(JNIEnv*, jobject) { return (jint)(g_wr.load() - g_rd.load()); }
 
 // Decoder thread (the only one pushing): new sample rate for the next track. Drops what's queued.

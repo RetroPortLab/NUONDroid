@@ -111,6 +111,25 @@ install it once from the **Samsung DVD-N501 firmware update** (`nuon.zip`, or th
 2. **Choose music folder**. Anything Android can decode plays: MP3, FLAC, Ogg/Opus, M4A/AAC, WAV.
 3. **Play all**, **Shuffle**, or pick a track.
 
+### Spotify and other apps
+
+**Music → Play along with another app** shows VLM for whatever another app is playing:
+Spotify, YouTube Music, a radio app. Start the music there first. That app keeps
+playing it; NUONDroid only listens, and R1 / L1 skip tracks in that app like headphone
+buttons do.
+
+Android asks for two things:
+- **Microphone**: Android puts hearing other apps' audio under this permission.
+  Nothing is recorded from the microphone.
+- **Screen capture** ("start recording or casting?"): the only way Android lets an app
+  hear other apps' sound in full quality. NUONDroid captures sound only, never the screen.
+
+Without screen capture, or if the playing app blocks capture (some music apps do),
+NUONDroid uses Android's Visualizer instead: short low-resolution snapshots of
+what's playing, 20 a second. VLM still follows the music and the beat, a little
+more coarsely. It switches by itself when capture hears nothing but the Visualizer
+hears music.
+
 | Button | VLM |
 |---|---|
 | A / B (or d-pad right / left) | Next / previous effect |
