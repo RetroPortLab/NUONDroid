@@ -387,7 +387,7 @@ class MainActivity : Activity() {
         }
         list.addView(trackRow)
         list.addView(ui.row("Track names from Spotify",
-            if (NowPlaying.allowed(this)) "Allowed" else "Android only shares what another app is playing if you turn on notification access for NUONDroid",
+            if (NowPlaying.allowed(this)) "Allowed" else "Needs notification access (if Android says it's restricted, see App info › ⋮ › Allow restricted settings), or turn on Device Broadcast Status in Spotify's settings",
             if (NowPlaying.allowed(this)) null else "Allow") { NowPlaying.openSettings(this) })
 
         list.addView(ui.sectionTitle("TV"))

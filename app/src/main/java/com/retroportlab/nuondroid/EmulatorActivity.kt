@@ -69,6 +69,7 @@ class EmulatorActivity : Activity() {
     private lateinit var trackView: TextView      // track / artist (Music)
     private var trackText = ""
     private var stopNowPlaying: (() -> Unit)? = null
+    private var stopSpotify: (() -> Unit)? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -331,8 +332,9 @@ class EmulatorActivity : Activity() {
 
     /** Live music: the playing app's track and artist, if the user allowed it (notification access). */
     private fun watchNowPlaying() {
-        if (!liveMode || live == null || stopNowPlaying != null || !NowPlaying.allowed(this)) return
-        stopNowPlaying = NowPlaying.watch(this) { t, a -> setTrack(t, a) }
+        if (!liveMode || live == null) return
+        if (stopSpotify == null) stopSpotify = NowPlaying.watchSpotify(this) { t, a -> setTrack(t, a) }
+        if (stopNowPlaying == null && NowPlaying.allowed(this)) stopNowPlaying = NowPlaying.watch(this) { t, a -> setTrack(t, a) }
     }
 
     private val hideTrack = Runnable { if (prefs.trackName != 2) trackView.visibility = View.GONE }
@@ -368,6 +370,7 @@ class EmulatorActivity : Activity() {
 
     private fun stopLive() {
         stopNowPlaying?.invoke(); stopNowPlaying = null
+        stopSpotify?.invoke(); stopSpotify = null
         live?.stop(); live = null
         CaptureService.stop(this)
     }
@@ -471,7 +474,7 @@ class EmulatorActivity : Activity() {
             panel.addView(trackRow)
             if (liveMode && !NowPlaying.allowed(this)) {
                 panel.addView(ui.row("Track names from Spotify",
-                    "Android only shares what another app is playing if you turn on notification access for NUONDroid", "Allow") {
+                    "Notification access for NUONDroid, or turn on Device Broadcast Status in Spotify's settings", "Allow") {
                     NowPlaying.openSettings(this)
                 })
             }

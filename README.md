@@ -136,6 +136,10 @@ menu, or with L3 / R3. For your files they come from the tags (the file name if 
 are none). For Spotify and other apps, Android only shares what's playing with apps
 given **notification access**: Settings → Track names from Spotify → Allow, and turn
 on NUONDroid. It reads no notifications, only the now-playing info that unlocks.
+If Android says the setting is restricted (it does for apps installed from an APK):
+Settings → Apps → NUONDroid → ⋮ (top right) → **Allow restricted settings**, then try
+again. Or skip notification access: in Spotify, turn on **Device Broadcast Status**
+(Settings, under Social), and NUONDroid picks up each new Spotify track from that.
 
 | Button | VLM |
 |---|---|

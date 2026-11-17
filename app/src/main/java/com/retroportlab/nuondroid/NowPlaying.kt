@@ -51,6 +51,25 @@ object NowPlaying {
     }
 
     /**
+     * Spotify's own "Device Broadcast Status" (a switch in Spotify's settings) announces
+     * each new track to any app, with no special access. Returns a stop function.
+     */
+    fun watchSpotify(ctx: Context, onChange: (title: String?, artist: String?) -> Unit): () -> Unit {
+        val r = object : android.content.BroadcastReceiver() {
+            override fun onReceive(c: Context, i: Intent) {
+                val t = i.getStringExtra("track") ?: return
+                onChange(t, i.getStringExtra("artist"))
+            }
+        }
+        val f = android.content.IntentFilter("com.spotify.music.metadatachanged")
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 33) ctx.registerReceiver(r, f, Context.RECEIVER_EXPORTED)
+            else ctx.registerReceiver(r, f)
+        } catch (e: Exception) { return {} }
+        return { runCatching { ctx.unregisterReceiver(r) }; Unit }
+    }
+
+    /**
      * Follows whichever app is playing and reports its track (main thread), or null
      * when nothing is known. Returns a stop function. Does nothing without access.
      */
