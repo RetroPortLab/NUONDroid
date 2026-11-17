@@ -78,6 +78,20 @@ ones from the upstream repo and are bundled into the APK at build time.
 | Start / Select | Start / NUON button |
 | Select + Start | In-game menu |
 
+## Cast to TV
+
+*Settings > TV > Cast to TV* (also in the in-game menu) opens Android's cast picker:
+pick a Chromecast or Google TV. Android streams the picture and the sound.
+
+*While casting*: **TV only** (default) moves the picture to the TV and darkens the
+handheld's screen; it shows where it's casting, and Select + Start still opens the
+menu there. **Both** leaves Android mirroring the handheld. TV only needs the cast to
+appear to apps as a second display; if your device's casting only mirrors, you'll
+get mirroring either way. A display plugged in over USB-C works the same way.
+
+The picture moves between screens without restarting anything: the emulator keeps
+one GL context and hands it from the handheld's view to the TV's.
+
 ## Music (VLM)
 
 NUONDroid can play your music with **VLM-2**, the Virtual Light Machine Jeff Minter

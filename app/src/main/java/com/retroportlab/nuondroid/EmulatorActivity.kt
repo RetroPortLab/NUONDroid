@@ -1,6 +1,11 @@
 package com.retroportlab.nuondroid
 
 import android.app.Activity
+import android.view.ViewGroup
+import android.view.Display
+import android.hardware.display.DisplayManager
+import android.content.Context
+import android.app.Presentation
 import android.opengl.EGL14
 import android.opengl.GLSurfaceView
 import android.os.Build
@@ -81,15 +86,11 @@ class EmulatorActivity : Activity() {
             gameTitle = intent.getStringExtra(EXTRA_TITLE) ?: File(gamePath).nameWithoutExtension
         }
 
-        glView = GLSurfaceView(this).apply {
-            setEGLContextClientVersion(3)
-            setEGLConfigChooser(8, 8, 8, 8, 0, 0)
-            preserveEGLContextOnPause = true
-            setRenderer(Renderer())
-            renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
-        }
+        glView = newGlView(this)
         root = FrameLayout(this).apply { setBackgroundColor(0xFF000000.toInt()) }
         root.addView(glView, FrameLayout.LayoutParams(-1, -1))
+        tvNote = ui.text("", 16f, Ui.SUBTEXT, false).apply { gravity = Gravity.CENTER; visibility = View.GONE }
+        root.addView(tvNote, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
         fpsView = ui.text("", 13f, Ui.TEXT, true).apply {
             typeface = Typeface.MONOSPACE
             setPadding(ui.dp(8f), ui.dp(4f), ui.dp(8f), ui.dp(4f))
@@ -111,6 +112,83 @@ class EmulatorActivity : Activity() {
         hideSystemUi()
     }
 
+    // ---------------------------------------------------------------- TV ----
+    // When the system casts to a TV (Chromecast / Google TV screen cast) or a display
+    // is plugged in, Android offers it as a presentation display. With "TV only" the
+    // picture moves there and the handheld screen goes dark (menu still works here);
+    // otherwise the system just mirrors the handheld.
+    private var tvNote: TextView? = null
+    private var presentation: Presentation? = null
+    private var currentTvId: Int? = null      // display the picture is on, null = handheld
+    private val displayManager by lazy { getSystemService(DISPLAY_SERVICE) as DisplayManager }
+
+    private fun newGlView(ctx: Context) = GLSurfaceView(ctx).apply {
+        setEGLContextFactory(SharedEgl)
+        setEGLConfigChooser(8, 8, 8, 8, 0, 0)
+        preserveEGLContextOnPause = true
+        setRenderer(Renderer())
+        renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
+    }
+
+    private fun tvDisplay(): Display? =
+        if (!prefs.tvOnly) null
+        else displayManager.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION).firstOrNull { it.isValid }
+
+    private val displayListener = object : DisplayManager.DisplayListener {
+        override fun onDisplayAdded(id: Int) = updateTv()
+        override fun onDisplayRemoved(id: Int) = updateTv()
+        override fun onDisplayChanged(id: Int) {}
+    }
+
+    /** Puts the picture on the TV, or back on the handheld, to match what's connected. */
+    fun updateTv() {
+        if (isFinishing || isDestroyed) return
+        val want = tvDisplay()
+        val wantId = want?.displayId
+        val settled = if (wantId == null) currentTvId == null else currentTvId == wantId && presentation?.isShowing == true
+        if (settled) return
+
+        // Retire the current view. Its GL thread lets go of the shared context (see
+        // SharedEgl), which the new view's thread then picks up: same context, new
+        // surface, so neither the core nor the host loses anything.
+        val old = glView
+        old.preserveEGLContextOnPause = false
+        old.onPause()
+        (old.parent as? ViewGroup)?.removeView(old)
+        presentation?.let { runCatching { it.dismiss() } }
+        presentation = null
+
+        if (want != null) {
+            val p = Presentation(this, want)
+            p.window?.addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            val tvRoot = FrameLayout(p.context).apply { setBackgroundColor(0xFF000000.toInt()) }
+            glView = newGlView(p.context)
+            tvRoot.addView(glView, FrameLayout.LayoutParams(-1, -1))
+            p.setContentView(tvRoot)
+            p.setOnDismissListener { uiHandler.post { updateTv() } }
+            try {
+                p.show()
+                presentation = p
+            } catch (e: WindowManager.InvalidDisplayException) {
+                (glView.parent as? ViewGroup)?.removeView(glView)
+                glView = newGlView(this)
+                root.addView(glView, 0, FrameLayout.LayoutParams(-1, -1))
+            }
+        } else {
+            glView = newGlView(this)
+            root.addView(glView, 0, FrameLayout.LayoutParams(-1, -1))
+        }
+        val onTv = presentation != null
+        currentTvId = presentation?.display?.displayId
+        tvNote?.text = if (onTv) "Showing on ${want?.name ?: "TV"}\n\nSelect + Start for the menu" else ""
+        tvNote?.visibility = if (onTv) View.VISIBLE else View.GONE
+        // Dim the handheld's backlight while it shows nothing.
+        window.attributes = window.attributes.apply {
+            screenBrightness = if (onTv) 0.01f else WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+        }
+        if (!menuOpen) glView.onResume()
+    }
+
     private inner class Renderer : GLSurfaceView.Renderer {
         override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
             // The core paces itself by the real clock (it emulates up to each 60 Hz
@@ -122,7 +200,9 @@ class EmulatorActivity : Activity() {
             try { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY) } catch (e: Exception) {
                 try { Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY) } catch (ignored: Exception) {}
             }
-            Native.glCreated()
+            // A view taking over the shared context (moved to or from a TV) finds all
+            // GL state in place; only a newly made context needs it rebuilt.
+            if (!started || SharedEgl.fresh) Native.glCreated()
             if (started) return
             started = true
 
@@ -312,6 +392,15 @@ class EmulatorActivity : Activity() {
         panel.addView(screenRow)
         panel.addView(upscaleRow)
         panel.addView(fpsRow)
+        panel.addView(ui.row("Cast to TV", TvCast.status(this), null) { TvCast.openPicker(this) })
+        lateinit var tvRow: View
+        tvRow = ui.row("While casting", "TV only: the handheld screen goes dark. Both: the TV mirrors the handheld.",
+            if (prefs.tvOnly) "TV only" else "Both") {
+            prefs.tvOnly = !prefs.tvOnly
+            ui.setRowValue(tvRow, if (prefs.tvOnly) "TV only" else "Both")
+            updateTv()
+        }
+        panel.addView(tvRow)
         panel.addView(ui.row(if (vlm) "Stop music" else "Quit to library", null, null) { finish() })
 
         val sv = ScrollView(this).apply { addView(panel, FrameLayout.LayoutParams(ui.dp(360f), -2)) }
@@ -398,6 +487,8 @@ class EmulatorActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        displayManager.registerDisplayListener(displayListener, uiHandler)
+        updateTv()
         hideSystemUi()
         applyFpsOverlay()
         glView.onResume()
@@ -405,6 +496,7 @@ class EmulatorActivity : Activity() {
     }
 
     override fun onPause() {
+        displayManager.unregisterDisplayListener(displayListener)
         uiHandler.removeCallbacks(fpsUpdater)
         Native.setPaused(true)
         Native.setInput(0)
@@ -415,6 +507,7 @@ class EmulatorActivity : Activity() {
     }
 
     override fun onDestroy() {
+        presentation?.let { runCatching { it.dismiss() } }
         if (effect >= 0) prefs.vlmEffect = effect
         music?.stop()
         uiHandler.removeCallbacks(vlmWatcher)

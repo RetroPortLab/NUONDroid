@@ -7,6 +7,8 @@ object Native {
     external fun init(systemDir: String, saveDir: String, tmpDir: String)
     external fun glCreated()
     external fun glChanged(w: Int, h: Int)
+    /** GL thread, just before its context goes away (moving the picture to or from a TV). */
+    external fun glDestroyed()
     external fun loadGame(path: String): Boolean
     external fun frame()
     external fun reset()

@@ -336,6 +336,18 @@ class MainActivity : Activity() {
             if (VlmFirmware.installed(this)) "Replace" else "Install") { pickFirmware() })
         list.addView(ui.row("Music folder", prefs.musicDir.ifEmpty { "Not chosen" }, "Change") { pickMusicFolder() })
 
+        list.addView(ui.sectionTitle("TV"))
+        list.addView(ui.row("Cast to TV", "Chromecast or Google TV, picture and sound, also shown here. ${TvCast.status(this)}", "Open") {
+            TvCast.openPicker(this)
+        })
+        lateinit var tvRow: View
+        tvRow = ui.row("While casting", "TV only: the picture goes to the TV and the handheld screen goes dark. Both: the TV mirrors the handheld.",
+            if (prefs.tvOnly) "TV only" else "Both") {
+            prefs.tvOnly = !prefs.tvOnly
+            ui.setRowValue(tvRow, if (prefs.tvOnly) "TV only" else "Both")
+        }
+        list.addView(tvRow)
+
         list.addView(ui.sectionTitle("Display"))
         list.addView(cycleRow("Scanlines", "CRT-style lines between the picture's rows", "scanlines", Prefs.SCANLINE_NAMES))
         list.addView(cycleRow("Screen", "4:3 fills the height; Stretch fills the whole screen", "aspect", Prefs.SCREEN_NAMES))

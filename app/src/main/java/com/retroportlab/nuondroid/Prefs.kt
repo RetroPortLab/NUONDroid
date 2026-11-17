@@ -84,6 +84,11 @@ class Prefs private constructor(private val file: File) {
         get() = getBool("vlmAuto", true)
         set(v) = putBool("vlmAuto", v)
 
+    /** While casting to a TV: true = picture on the TV only, handheld screen dark. */
+    var tvOnly: Boolean
+        get() = getBool("tvOnly", true)
+        set(v) = putBool("tvOnly", v)
+
     companion object {
         val SCANLINE_NAMES = arrayOf("Off", "Light", "Strong")
         val SCANLINE_PCT = intArrayOf(0, 30, 60)
