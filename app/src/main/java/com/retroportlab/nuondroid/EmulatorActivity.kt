@@ -289,7 +289,7 @@ class EmulatorActivity : Activity() {
             val tmp = File(cacheDir, "tmp").apply { deleteRecursively(); mkdirs() }
             Native.init(system.absolutePath, saves.absolutePath, tmp.absolutePath)
             applyDisplayOptions()
-            if (vlm) Native.vlmEnable()
+            if (vlm) { Native.vlmEnable(); Native.vlmSetIntensity(Prefs.INTENSITY_VALUES[prefs.vlmIntensity]) }
 
             if (Native.loadGame(gamePath)) {
                 if (vlm) runOnUiThread { startMusic() }
@@ -539,6 +539,13 @@ class EmulatorActivity : Activity() {
             lateinit var trackRow: View
             trackRow = ui.row("Show track name", null, Prefs.TRACK_NAMES[prefs.trackName]) { ui.setRowValue(trackRow, cycleTrackName()) }
             panel.addView(trackRow)
+            lateinit var intensityRow: View
+            intensityRow = ui.row("Intensity", "How strongly the effects react to the music", Prefs.INTENSITY_NAMES[prefs.vlmIntensity]) {
+                prefs.vlmIntensity = (prefs.vlmIntensity + 1) % Prefs.INTENSITY_NAMES.size
+                Native.vlmSetIntensity(Prefs.INTENSITY_VALUES[prefs.vlmIntensity])
+                ui.setRowValue(intensityRow, Prefs.INTENSITY_NAMES[prefs.vlmIntensity])
+            }
+            panel.addView(intensityRow)
             lateinit var skipRow: View
             lateinit var controlsRow: View
             skipRow = ui.row("Skip tracks with", null, skipName()) {

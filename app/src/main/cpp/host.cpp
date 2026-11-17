@@ -64,6 +64,7 @@ extern int nuance_vlm_mode;
 void nuance_vlm_set_audio(const int16_t* lr);
 void nuance_vlm_set_levels(int bass, int treble, int level);
 void nuance_vlm_set_effect(int n);
+void nuance_vlm_set_intensity(float x);
 int nuance_vlm_effect(void);
 int nuance_vlm_effect_count(void);
 const uint8_t* nuance_vlm_frame(int* w, int* h, int* stride);
@@ -692,6 +693,7 @@ JNIEXPORT void JNICALL JNI(vlmFlush)(JNIEnv*, jobject) {
 }
 
 JNIEXPORT void JNICALL JNI(vlmSetEffect)(JNIEnv*, jobject, jint n) { nuance_vlm_set_effect(n); }
+JNIEXPORT void JNICALL JNI(vlmSetIntensity)(JNIEnv*, jobject, jfloat x) { nuance_vlm_set_intensity(x); }
 JNIEXPORT jint JNICALL JNI(vlmEffect)(JNIEnv*, jobject) { return nuance_vlm_effect(); }
 JNIEXPORT jint JNICALL JNI(vlmEffectCount)(JNIEnv*, jobject) { return nuance_vlm_effect_count(); }
 JNIEXPORT jint JNICALL JNI(vlmLuma)(JNIEnv*, jobject) { return g_vlmLuma.load(); }

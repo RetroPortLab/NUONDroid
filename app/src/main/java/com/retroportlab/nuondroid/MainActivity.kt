@@ -386,6 +386,13 @@ class MainActivity : Activity() {
             ui.setRowValue(trackRow, Prefs.TRACK_NAMES[prefs.trackName])
         }
         list.addView(trackRow)
+        lateinit var intensityRow: View
+        intensityRow = ui.row("Intensity", "How strongly the effects react to the music. High is the most frantic; Low is calmer.",
+            Prefs.INTENSITY_NAMES[prefs.vlmIntensity]) {
+            prefs.vlmIntensity = (prefs.vlmIntensity + 1) % Prefs.INTENSITY_NAMES.size
+            ui.setRowValue(intensityRow, Prefs.INTENSITY_NAMES[prefs.vlmIntensity])
+        }
+        list.addView(intensityRow)
         lateinit var skipRow: View
         fun skipName() = if (prefs.vlmTriggerSkip) "Triggers (R2 / L2)" else "Shoulders (R1 / L1)"
         skipRow = ui.row("Skip tracks with", "The other pair turns automatic effect changes on and off", skipName()) {

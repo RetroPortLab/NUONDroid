@@ -170,6 +170,12 @@ just played:
 - about 240 reports a second of low-band and high-band rises plus the overall level,
   which drive VLM's own beat detection, tempo tracking and automatic gain.
 
+**Intensity** (Settings or the menu: Low / Normal / High) sets how strongly the
+effects react. Loud, bright recordings push VLM's upper frequency bands to their
+ceiling even at VLM's lowest automatic gain, and the effects then run flat out
+whatever the music does; at Normal and Low a slow limiter turns the spectrum down
+until the bands have room to move again. High turns the limiter off.
+
 VLM draws 175×119 frames (the player scaled them up too) at about 20 fps. Effects that
 stay black with your music are skipped.
 

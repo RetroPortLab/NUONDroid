@@ -39,6 +39,8 @@ object Native {
     /** Live input: music another app is playing. VLM sees it; it isn't played again. */
     external fun vlmSetLive(on: Boolean)
     external fun vlmSetEffect(n: Int)
+    /** How strongly VLM reacts: 0.5 calm, 1 normal, 1.5 lively (and no limiter). */
+    external fun vlmSetIntensity(x: Float)
     /** Current effect, or -1 while VLM is still starting. */
     external fun vlmEffect(): Int
     /** Number of effects (0 while VLM is still starting). */

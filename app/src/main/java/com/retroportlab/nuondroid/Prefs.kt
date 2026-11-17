@@ -89,6 +89,11 @@ class Prefs private constructor(private val file: File) {
         get() = getBool("vlmTriggerSkip", true)
         set(v) = putBool("vlmTriggerSkip", v)
 
+    /** Music (VLM): index into [INTENSITY_NAMES]. */
+    var vlmIntensity: Int
+        get() = getInt("vlmIntensity", 1).coerceIn(0, INTENSITY_NAMES.size - 1)
+        set(v) = putInt("vlmIntensity", v)
+
     /** Music (VLM): track and artist on screen. Index into [TRACK_NAMES]. */
     var trackName: Int
         get() = getInt("trackName", 1).coerceIn(0, TRACK_NAMES.size - 1)
@@ -108,6 +113,8 @@ class Prefs private constructor(private val file: File) {
         val SCANLINE_NAMES = arrayOf("Off", "Light", "Strong")
         val TV_RES_NAMES = arrayOf("480p (NUON's own)", "720p", "1080p", "The TV's own")
         val TV_RES_LINES = intArrayOf(480, 720, 1080, 0)
+        val INTENSITY_NAMES = arrayOf("Low", "Normal", "High")
+        val INTENSITY_VALUES = floatArrayOf(0.5f, 1.0f, 1.5f)
         val TRACK_NAMES = arrayOf("Off", "When the track changes", "Always")
         val SCANLINE_PCT = intArrayOf(0, 30, 60)
         val SCREEN_NAMES = arrayOf("4:3", "Stretch")

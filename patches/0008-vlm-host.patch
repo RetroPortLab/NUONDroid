@@ -86,10 +86,10 @@ index 4e0fea9..f838f75 100644
    {
 diff --git a/src/vlmhost.cpp b/src/vlmhost.cpp
 new file mode 100644
-index 0000000..e06b638
+index 0000000..7e7526a
 --- /dev/null
 +++ b/src/vlmhost.cpp
-@@ -0,0 +1,329 @@
+@@ -0,0 +1,357 @@
 +// NUONDroid: VLM host.
 +//
 +// Runs the playback engine ("pe") of a NUON DVD player's firmware on its own and
@@ -167,12 +167,15 @@ index 0000000..e06b638
 +std::atomic<int> g_wantEffect{-1};
 +uint32 g_time = 0;          // where the 90 kHz clock should be
 +uint64_t g_fields = 0;      // video fields counted so far
++uint64_t g_headroomFields = 0;
 +std::chrono::steady_clock::time_point g_start;
 +struct Onset { int32 bass, treble, level; };
 +Onset g_onset[16];          // queued detector inputs (four per 1/60 s of music)
 +std::atomic<uint32> g_onsetWr{0}, g_onsetRd{0};
 +int16_t g_pcm[512];         // last 256 stereo frames, interleaved
 +std::atomic<bool> g_audioNew{false};
++std::atomic<float> g_intensity{1.0f};   // user's Intensity setting: scales the spectrum VLM sees
++float g_extra = 1.0f;                   // headroom below VLM's own gain range (see Headroom)
 +
 +inline uint8* SysPtr(uint32 a) { return nuonEnv.systemBusDRAM + (a & SYSTEM_BUS_VALID_MEMORY_MASK); }
 +inline uint32 Rd32(const uint8* p) { return (uint32)p[0] << 24 | (uint32)p[1] << 16 | (uint32)p[2] << 8 | p[3]; }
@@ -199,6 +202,24 @@ index 0000000..e06b638
 +  }
 +}
 +
++// Loud, bright masters drive VLM's upper bands to their ceiling (0x3FFF) however
++// VLM sets its own gain (which follows the overall level, not the spectrum), and the
++// effects then run flat out whatever the music does. A slow limiter on the spectrum
++// keeps them below it: down while bands are pinned, back up once there's room.
++// Intensity High turns the limiter off; Low limits sooner.
++constexpr uint32 VLM_BANDS = 0x806308F0;  // band levels, 7 used, clamped 0x3FFF
++void Headroom() {
++  const float inten = g_intensity.load(std::memory_order_relaxed);
++  if (inten > 1.01f) { g_extra = 1.0f; return; }
++  int pinned = 0; uint32 top = 0;
++  for (int k = 0; k < 7; k++) { const uint32 v = Rd32(SysPtr(VLM_BANDS + 4 * k)); if (v >= 0x3F00) pinned++; if (v > top) top = v; }
++  const int limit = inten < 0.99f ? 1 : 2;
++  if (pinned >= limit) g_extra *= 0.985f;            // ~1 s to halve
++  else if (top < 0x3000) g_extra *= 1.004f;          // ~3 s to double back
++  if (g_extra < 0.03f) g_extra = 0.03f;
++  if (g_extra > 1.0f) g_extra = 1.0f;
++}
++
 +void WriteAudio() {
 +  // Waveform: the newest 64 frames as the hardware holds them, L16|R16.
 +  uint8* w = SysPtr(VLM_WAVE);
@@ -219,9 +240,10 @@ index 0000000..e06b638
 +  }
 +  Fft(re, im, 256);
 +  uint8* q = SysPtr(VLM_SPECTRUM);
++  const float inten = g_intensity.load(std::memory_order_relaxed) * g_extra;
 +  for (int k = 0; k < 128; k++) {
 +    const float p2 = re[k] * re[k] + im[k] * im[k];
-+    float m = powf(p2, 0.75f) * 4.0e-3f;
++    float m = powf(p2, 0.75f) * 4.0e-3f * inten;
 +    if (m > 2.0e9f) m = 2.0e9f;
 +    Wr32(q + k * 4, (uint32)(int32)m);
 +  }
@@ -258,6 +280,8 @@ index 0000000..e06b638
 +  g_step = 0;
 +  g_time = 0;
 +  g_fields = 0;
++  g_headroomFields = 0;
++  g_extra = 1.0f;
 +  g_start = std::chrono::steady_clock::now();
 +  StartCall(SEQUENCE[0].addr, SEQUENCE[0].args, SEQUENCE[0].nargs);
 +}
@@ -291,6 +315,7 @@ index 0000000..e06b638
 +  } else g_time = now;
 +
 +  // Audio: what the player's CD-audio path leaves for VLM each block.
++  if (g_step >= SEQ_LEN && fields > g_headroomFields) { g_headroomFields = fields; Headroom(); }   // 60 a second
 +  if (g_audioNew.exchange(false)) WriteAudio();
 +
 +  // Call sequence: the next call starts once the previous one hit the trap.
@@ -393,6 +418,9 @@ index 0000000..e06b638
 +  g_onset[wr & 15] = { bass, treble, level };
 +  g_onsetWr.store(wr + 1, std::memory_order_release);
 +}
++
++// How strongly VLM reacts: 1 = normal; 0.5 calmer, 2 livelier.
++void nuance_vlm_set_intensity(float x) { g_intensity.store(x > 0.05f ? x : 0.05f); }
 +
 +void nuance_vlm_set_effect(int n) { if (n >= 0) g_wantEffect.store(n); }
 +
