@@ -17,8 +17,8 @@ android {
         minSdk = 26          // AAudio
         targetSdk = 34
         // Same scheme as JagDroid: v0.01 -> versionCode 1, v0.02 -> 2 ...
-        versionCode = 3
-        versionName = "0.03-experimental"
+        versionCode = 4
+        versionName = "0.04-experimental"
 
         // The core's execution engine on non-x86 is the IL interpreter, and the
         // Retroid handhelds are all arm64. (x86_64 would additionally need the

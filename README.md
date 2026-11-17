@@ -111,6 +111,10 @@ idempotent):
   emulated MPEs: games boot to a black screen with no sound. Found by running the
   core headless with nuontest, which freezes at "testing in" without this patch and
   passes all instruction tests with it. Worth reporting upstream.
+- `0005` trims the interpreter's per-packet overhead without changing behaviour:
+  stopped MPEs are no longer called every step, and the media-callback tick is
+  advanced inline and only calls out when something is queued. Measured with
+  callgrind on nuontest: 351 -> 221 host instructions per NUON packet.
 
 ## Licence
 

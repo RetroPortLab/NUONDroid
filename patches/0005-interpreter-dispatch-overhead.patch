@@ -1,0 +1,151 @@
+diff --git a/src/libretro.cpp b/src/libretro.cpp
+index 5ff8538..9cfc0fb 100644
+--- a/src/libretro.cpp
++++ b/src/libretro.cpp
+@@ -476,8 +476,15 @@ void retro_run(void)
+         cycles++;
+ 
+         for (int i = 3; i >= 0; --i)
+-            if (i != 3 || nuonEnv.MPE3wait_fieldCounter == 0)
+-                nuonEnv.mpe[i].FetchDecodeExecute();
++            if (i != 3 || nuonEnv.MPE3wait_fieldCounter == 0) {
++                // A stopped MPE's FetchDecodeExecute only zeroes cycleCounter;
++                // test the GO bit here and save the call.
++                MPE& m = nuonEnv.mpe[i];
++                if (m.mpectl & MPECTRL_MPEGO)
++                    m.FetchDecodeExecute();
++                else
++                    m.cycleCounter = 0;
++            }
+ 
+         if (nuonEnv.pendingCommRequests)
+             DoCommBusController();
+diff --git a/src/media.cpp b/src/media.cpp
+index fd3281c..0e1abfe 100644
+--- a/src/media.cpp
++++ b/src/media.cpp
+@@ -69,6 +69,10 @@ static uint32 s_cbReturnR0 = 0;
+ static uint32 s_cbReturnR1 = 0;
+ static bool   s_cbReturnPending = false;
+ 
++// Per-MPE count of queued media callbacks (0 when MEDIA_ASYNC_CALLBACKS is off).
++// Read by MPE::FetchDecodeExecute to skip TickMediaCallbacks when idle.
++uint32 g_mediaCbQueued[4] = {0, 0, 0, 0};
++
+ #ifdef MEDIA_ASYNC_CALLBACKS
+ // Asynchronous (delayed-FIFO) state
+ struct PendingMediaCB
+@@ -82,6 +86,9 @@ struct PendingMediaCB
+ };
+ 
+ static std::deque<PendingMediaCB> s_cbFifo[4]; // queue per MPE
++// Mirror of s_cbFifo[i].size(), so the dispatcher only calls TickMediaCallbacks
++// when there is something queued (it is otherwise a no-op once per packet)
++static inline void SyncMediaCbQueued(const uint32 i) { g_mediaCbQueued[i] = (uint32)s_cbFifo[i].size(); }
+ 
+ // Per-MPE step counter for callback scheduling. Using mpe.cycleCounter
+ // is not feasible at the moment, as FetchDecodeExecute resets
+@@ -89,7 +96,7 @@ static std::deque<PendingMediaCB> s_cbFifo[4]; // queue per MPE
+ // once per TickMediaCallbacks for the MPE in question and is the
+ // reference clock both MediaRead/MediaWrite (when scheduling) and
+ // the tick (when checking due times) read
+-static uint64 s_tickCounter[4] = {0, 0, 0, 0};
++uint64 s_tickCounter[4] = {0, 0, 0, 0}; // global: MPE::FetchDecodeExecute advances it inline (see g_mediaCbQueued)
+ 
+ // User context is saved while an async-fired callback is in flight (so the shim
+ // can resume the interrupted code exactly where it left off). There is
+@@ -154,7 +161,7 @@ static void InvokeMediaCallback(MPE &mpe, const uint32 callback, const uint32 cb
+ // fires per tick (the rest stays queued until that callback's shim returns)
+ void TickMediaCallbacks(MPE &mpe)
+ {  
+-  const uint64 nowTick = ++s_tickCounter[mpe.mpeIndex]; // Advance the per-MPE tick counter
++  const uint64 nowTick = s_tickCounter[mpe.mpeIndex]; // already advanced by the caller (MPE::FetchDecodeExecute)
+ 
+   if(s_asyncCbActive || s_cbReturnPending) return; // Re-entry guard: if either kind of callback is mid-flight we mustn't destroy the saved context.
+ 
+@@ -195,11 +202,13 @@ void TickMediaCallbacks(MPE &mpe)
+       mpe.pcexec  = top.callback;
+ 
+       q.pop_front();
++      SyncMediaCbQueued(mpe.mpeIndex);
+       return; // wait for the shim before processing the next entry
+     }
+ 
+     // Delivery-only entry (no callback to fire): pop and check the next one //!! unclear if this could/should be optimized (so far)
+     q.pop_front();
++    SyncMediaCbQueued(mpe.mpeIndex);
+   }
+ }
+ 
+@@ -232,6 +241,7 @@ void MediaShutdownMPE(MPE &mpe)
+ #ifdef MEDIA_ASYNC_CALLBACKS
+   // Discard any pending block deliveries / callbacks targeted for the now-shut-down media MPE - they would dispatch into a halted processor otherwise
+   s_cbFifo[media_mpe].clear();
++  SyncMediaCbQueued(media_mpe);
+   s_asyncCbActive = false;
+   s_cbReturnPending = false;
+   s_tickCounter[media_mpe] = 0; // Reset monotonic clock so fresh MediaInitMPE starts from 0
+@@ -598,7 +608,7 @@ void MediaRead(MPE &mpe)
+       e.callback    = callback;
+       e.cbR0        = (uint32)eMedia::MCB_ERROR;
+       e.cbR1        = 0u;
+-      s_cbFifo[mpe.mpeIndex].push_back(std::move(e));
++      s_cbFifo[mpe.mpeIndex].push_back(std::move(e)); SyncMediaCbQueued(mpe.mpeIndex);
+       mpe.regs[0]   = (uint32)-1; // visible to caller immediately
+ #else
+       InvokeMediaCallback(mpe, callback,
+@@ -651,7 +661,7 @@ void MediaRead(MPE &mpe)
+         {
+           e.callback = 0; // delivery only
+         }
+-        s_cbFifo[mpe.mpeIndex].push_back(std::move(e));
++        s_cbFifo[mpe.mpeIndex].push_back(std::move(e)); SyncMediaCbQueued(mpe.mpeIndex);
+       }
+       if(wantsEnd)
+       {
+@@ -661,7 +671,7 @@ void MediaRead(MPE &mpe)
+         e.callback    = callback;
+         e.cbR0        = (uint32)eMedia::MCB_END;
+         e.cbR1        = blockcount;
+-        s_cbFifo[mpe.mpeIndex].push_back(std::move(e));
++        s_cbFifo[mpe.mpeIndex].push_back(std::move(e)); SyncMediaCbQueued(mpe.mpeIndex);
+       }
+     }
+     else
+@@ -709,7 +719,7 @@ void MediaRead(MPE &mpe)
+       e.callback    = callback;
+       e.cbR0        = (uint32)eMedia::MCB_ERROR;
+       e.cbR1        = readCount;
+-      s_cbFifo[mpe.mpeIndex].push_back(std::move(e));
++      s_cbFifo[mpe.mpeIndex].push_back(std::move(e)); SyncMediaCbQueued(mpe.mpeIndex);
+       mpe.regs[0]   = (uint32)-1;
+ #else
+       InvokeMediaCallback(mpe, callback,
+diff --git a/src/mpe.cpp b/src/mpe.cpp
+index 0b8fa1c..4e0fea9 100644
+--- a/src/mpe.cpp
++++ b/src/mpe.cpp
+@@ -49,6 +49,8 @@ extern void NullBiosHandler(MPE& mpe);
+ extern void WillNotImplement(MPE& mpe);
+ extern void AssemblyBiosHandler(MPE& mpe);
+ extern void TickMediaCallbacks(MPE& mpe); // media.cpp: drains the per-MPE delayed-callback FIFO for MediaRead
++extern uint64 s_tickCounter[4];  // media.cpp: per-MPE step clock for MediaRead/MediaWrite scheduling
++extern uint32 g_mediaCbQueued[4]; // media.cpp: entries waiting in that MPE's callback FIFO
+ extern void UnimplementedCacheHandler(MPE& mpe);
+ extern void UnimplementedMediaHandler(MPE& mpe);
+ extern bool bCallingMediaCallback;
+@@ -2227,7 +2229,13 @@ bool MPE::FetchDecodeExecute()
+     // Skip while the MPE is halted or has an exception pending, as there's
+     // no user code to interrupt in those states
+     if(!(excephalten & excepsrc) && (mpectl & MPECTRL_MPEGO))
+-      TickMediaCallbacks(*this);
++    {
++      // Advance the media step clock here and only call out when something is
++      // queued: the call was a no-op on almost every packet.
++      ++s_tickCounter[mpeIndex];
++      if(g_mediaCbQueued[mpeIndex])
++        TickMediaCallbacks(*this);
++    }
+ 
+     if (pcexec == breakpointAddress)
+       StopEmulation(mpeIndex);

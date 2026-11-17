@@ -1,6 +1,7 @@
 package com.retroportlab.nuondroid
 
 import android.app.Activity
+import android.opengl.EGL14
 import android.opengl.GLSurfaceView
 import android.os.Build
 import android.os.Bundle
@@ -71,6 +72,15 @@ class EmulatorActivity : Activity() {
 
     private inner class Renderer : GLSurfaceView.Renderer {
         override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
+            // The core paces itself by the real clock (it emulates up to each 60 Hz
+            // field, then returns a frame). Waiting for vsync in eglSwapBuffers on top
+            // of that is time the NUON isn't running, so don't: the compositor still
+            // shows whole frames.
+            EGL14.eglSwapInterval(EGL14.eglGetCurrentDisplay(), 0)
+            // Emulation runs on this thread; ask to keep it on a fast core.
+            try { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY) } catch (e: Exception) {
+                try { Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY) } catch (ignored: Exception) {}
+            }
             Native.glCreated()
             if (started) return
             started = true

@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <unistd.h>
 
 #include "libretro.h"
 
@@ -353,6 +354,9 @@ JNIEXPORT void JNICALL JNI(frame)(JNIEnv*, jobject) {
         // The core leaves arbitrary GL state behind; blit() sets what it needs.
     }
     if (g_haveFrame || g_loaded) blit();
+    // Swap interval is 0 (see EmulatorActivity), so nothing else slows this loop
+    // down while the core isn't running: don't spin redrawing the paused frame.
+    if (g_paused.load()) usleep(16000);
 }
 
 JNIEXPORT void JNICALL JNI(setInput)(JNIEnv*, jobject, jint mask) { g_input.store((uint32_t)mask); }
