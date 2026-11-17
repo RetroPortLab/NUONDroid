@@ -232,8 +232,10 @@ class MainActivity : Activity() {
 
         list.addView(ui.sectionTitle("Display"))
         list.addView(cycleRow("Scanlines", "CRT-style lines between the picture's rows", "scanlines", Prefs.SCANLINE_NAMES))
-        list.addView(cycleRow("Screen", "4:3 fills the height; Stretch fills the whole screen; Sharp turns off smoothing",
-            "aspect", Prefs.SCREEN_NAMES))
+        list.addView(cycleRow("Screen", "4:3 fills the height; Stretch fills the whole screen", "aspect", Prefs.SCREEN_NAMES))
+        list.addView(cycleRow("Upscaling", "Soft: plain smoothing. Sharp pixels: crisp, even pixels. Smooth HD: bicubic, for a clean high-res look",
+            "upscale", Prefs.UPSCALE_NAMES))
+        list.addView(toggleRow("Show FPS", "Screen and game frame rates, and NUON speed, in the corner while playing", "showFps", false))
         list.addView(toggleRow("Core CRT shader", "NuanceResurrection's own CRT effect. Heavier on the GPU; takes effect next game",
             "coreCrt", false))
 

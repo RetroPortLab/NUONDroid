@@ -15,6 +15,9 @@ object Native {
 
     // Safe from any thread.
     external fun setInput(mask: Int)
-    external fun setOptions(scanlinesPct: Int, aspectMode: Int)
+    external fun setOptions(scanlinesPct: Int, aspectMode: Int, filter: Int)
     external fun setPaused(paused: Boolean)
+
+    /** [screen fps, game fps, NUON instruction packets per second in millions], updated once a second. */
+    external fun getStats(): FloatArray
 }

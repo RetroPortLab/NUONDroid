@@ -5,7 +5,11 @@ import android.opengl.EGL14
 import android.opengl.GLSurfaceView
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.Process
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.InputDevice
 import android.view.KeyEvent
@@ -17,7 +21,9 @@ import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.TextView
 import android.widget.Toast
+import java.util.Locale
 import java.io.File
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
@@ -66,6 +72,15 @@ class EmulatorActivity : Activity() {
         }
         root = FrameLayout(this).apply { setBackgroundColor(0xFF000000.toInt()) }
         root.addView(glView, FrameLayout.LayoutParams(-1, -1))
+        fpsView = ui.text("", 13f, Ui.TEXT, true).apply {
+            typeface = Typeface.MONOSPACE
+            setPadding(ui.dp(8f), ui.dp(4f), ui.dp(8f), ui.dp(4f))
+            background = GradientDrawable().apply { setColor(0x99000000.toInt()); cornerRadius = ui.dp(6f).toFloat() }
+            visibility = View.GONE
+        }
+        root.addView(fpsView, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START).apply {
+            leftMargin = ui.dp(12f); topMargin = ui.dp(12f)
+        })
         setContentView(root)
         hideSystemUi()
     }
@@ -105,7 +120,31 @@ class EmulatorActivity : Activity() {
         override fun onDrawFrame(gl: GL10?) = Native.frame()
     }
 
-    private fun applyDisplayOptions() = Native.setOptions(Prefs.SCANLINE_PCT[prefs.scanlines], prefs.aspect)
+    private fun applyDisplayOptions() = Native.setOptions(Prefs.SCANLINE_PCT[prefs.scanlines], prefs.aspect, prefs.upscale)
+
+    // ------------------------------------------------------------- FPS overlay --
+    private lateinit var fpsView: TextView
+    private val uiHandler = Handler(Looper.getMainLooper())
+    private val fpsUpdater = object : Runnable {
+        override fun run() {
+            val s = Native.getStats()
+            // Screen fps stays near 60 because the core paces itself by the clock;
+            // the game's own frame rate is the number that shows slowdown.
+            val game = if (s[1] >= 0.5f) String.format(Locale.US, "%.0f", s[1]) else "-"
+            fpsView.text = String.format(Locale.US, "FPS %.0f  ·  game %s  ·  NUON %.1fM/s", s[0], game, s[2])
+            uiHandler.postDelayed(this, 500)
+        }
+    }
+
+    private fun applyFpsOverlay() {
+        uiHandler.removeCallbacks(fpsUpdater)
+        if (prefs.showFps) {
+            fpsView.visibility = View.VISIBLE
+            uiHandler.post(fpsUpdater)
+        } else {
+            fpsView.visibility = View.GONE
+        }
+    }
 
     // ---------------------------------------------------------- pause menu --
     private fun openPauseMenu() {
@@ -137,6 +176,18 @@ class EmulatorActivity : Activity() {
             ui.setRowValue(scan, Prefs.SCANLINE_NAMES[prefs.scanlines])
         }
         panel.addView(scan)
+        lateinit var upscaleRow: View
+        upscaleRow = ui.row("Upscaling", null, Prefs.UPSCALE_NAMES[prefs.upscale]) {
+            prefs.upscale = (prefs.upscale + 1) % Prefs.UPSCALE_NAMES.size
+            applyDisplayOptions()
+            ui.setRowValue(upscaleRow, Prefs.UPSCALE_NAMES[prefs.upscale])
+        }
+        lateinit var fpsRow: View
+        fpsRow = ui.row("Show FPS", null, if (prefs.showFps) "On" else "Off") {
+            prefs.showFps = !prefs.showFps
+            applyFpsOverlay()
+            ui.setRowValue(fpsRow, if (prefs.showFps) "On" else "Off")
+        }
         lateinit var screenRow: View
         screenRow = ui.row("Screen", null, Prefs.SCREEN_NAMES[prefs.aspect]) {
             prefs.aspect = (prefs.aspect + 1) % Prefs.SCREEN_NAMES.size
@@ -144,6 +195,8 @@ class EmulatorActivity : Activity() {
             ui.setRowValue(screenRow, Prefs.SCREEN_NAMES[prefs.aspect])
         }
         panel.addView(screenRow)
+        panel.addView(upscaleRow)
+        panel.addView(fpsRow)
         panel.addView(ui.row("Quit to library", null, null) { finish() })
 
         val sv = ScrollView(this).apply { addView(panel, FrameLayout.LayoutParams(ui.dp(360f), -2)) }
@@ -225,11 +278,13 @@ class EmulatorActivity : Activity() {
     override fun onResume() {
         super.onResume()
         hideSystemUi()
+        applyFpsOverlay()
         glView.onResume()
         if (!menuOpen) Native.setPaused(false)
     }
 
     override fun onPause() {
+        uiHandler.removeCallbacks(fpsUpdater)
         Native.setPaused(true)
         Native.setInput(0)
         if (isFinishing) glView.queueEvent { Native.unload() }   // runs on the GL thread, before it pauses

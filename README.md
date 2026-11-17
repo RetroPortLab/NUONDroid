@@ -51,7 +51,16 @@ keystore and its passwords somewhere safe outside the repo.
    plain file path, and ISOs are read in place rather than copied).
 2. **Games folder** → pick the folder with your NUON games. `.iso`, `.chd`, `.mds`/`.mdf`, `.zip`,
    `.run`, `.cof`, `.nuon`, `.cd` and `.img` are listed.
-3. Tap a game. **Select + Start** (or Back) opens the in-game menu. In menus, A selects and B goes back.
+3. Tap a game.
+
+Display options (Settings, and the in-game menu): Scanlines, Screen (4:3 or stretch),
+Upscaling (Soft, Sharp pixels, Smooth HD) and Show FPS. NUON games draw their picture
+in software into a 2D framebuffer, so there is no 3D scene to re-render at a higher
+resolution; upscaling is done with filters instead. The FPS overlay shows the screen
+rate, the game's own frame rate (how often it flips to a new frame - the number that
+drops when emulation is slow) and NUON speed in millions of instruction packets per second.
+
+ **Select + Start** (or Back) opens the in-game menu. In menus, A selects and B goes back.
 
 The three BIOS files (`bios.cof`, `minibios.cof`, `minibiosX.cof`) are the clean-room
 ones from the upstream repo and are bundled into the APK at build time.
@@ -121,6 +130,9 @@ idempotent):
   nuontest passes all interpreter and compiler tests in block mode; ~9% fewer host
   instructions per packet than the interpreter on its short blocks. Worth reporting
   upstream. NUONDroid turns block mode on by default (Settings > Faster CPU mode).
+- `0007` exports two counters for the FPS overlay: `nuance_video_flips` (bumped when
+  the game points the main video channel at a new frame via VidChangeBase/VidConfig)
+  and `nuance_packets_executed`.
 
 ## Licence
 

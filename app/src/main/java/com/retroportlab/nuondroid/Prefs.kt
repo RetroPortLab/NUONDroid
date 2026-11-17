@@ -42,10 +42,20 @@ class Prefs private constructor(private val file: File) {
         get() = getInt("scanlines", 0).coerceIn(0, SCANLINE_NAMES.size - 1)
         set(v) = putInt("scanlines", v)
 
-    /** Index into SCREEN_NAMES. */
+    /** Index into SCREEN_NAMES. (v0.01-v0.04 had a third value, "4:3 sharp", now Upscaling = Sharp pixels.) */
     var aspect: Int
-        get() = getInt("aspect", 0).coerceIn(0, SCREEN_NAMES.size - 1)
+        get() = getInt("aspect", 0).let { if (it == 2) 0 else it }.coerceIn(0, SCREEN_NAMES.size - 1)
         set(v) = putInt("aspect", v)
+
+    /** Index into UPSCALE_NAMES. */
+    var upscale: Int
+        get() = getInt("upscale", if (getInt("aspect", 0) == 2) 1 else 0).coerceIn(0, UPSCALE_NAMES.size - 1)
+        set(v) = putInt("upscale", v)
+
+    /** FPS / speed overlay while playing. */
+    var showFps: Boolean
+        get() = getBool("showFps", false)
+        set(v) = putBool("showFps", v)
 
     /**
      * Run straight-line NUON code as pre-decoded blocks (nuance.cfg DynamicCompiler)
@@ -63,7 +73,8 @@ class Prefs private constructor(private val file: File) {
     companion object {
         val SCANLINE_NAMES = arrayOf("Off", "Light", "Strong")
         val SCANLINE_PCT = intArrayOf(0, 30, 60)
-        val SCREEN_NAMES = arrayOf("4:3", "Stretch", "4:3 sharp")
+        val SCREEN_NAMES = arrayOf("4:3", "Stretch")
+        val UPSCALE_NAMES = arrayOf("Soft", "Sharp pixels", "Smooth HD")
 
         fun of(ctx: Context) = Prefs(File(ctx.filesDir, "settings.properties"))
     }

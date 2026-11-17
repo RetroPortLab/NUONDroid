@@ -1,0 +1,62 @@
+diff --git a/src/libretro.cpp b/src/libretro.cpp
+index 9cfc0fb..c58393d 100644
+--- a/src/libretro.cpp
++++ b/src/libretro.cpp
+@@ -449,6 +449,9 @@ void retro_unload_game(void)
+     VideoCleanup();
+ }
+ 
++// Instruction packets executed by all MPEs, for a frontend's speed display.
++extern "C" uint64 nuance_packets_executed = 0;
++
+ void retro_run(void)
+ {
+     if (!game_loaded) return;
+@@ -480,9 +483,10 @@ void retro_run(void)
+                 // A stopped MPE's FetchDecodeExecute only zeroes cycleCounter;
+                 // test the GO bit here and save the call.
+                 MPE& m = nuonEnv.mpe[i];
+-                if (m.mpectl & MPECTRL_MPEGO)
++                if (m.mpectl & MPECTRL_MPEGO) {
+                     m.FetchDecodeExecute();
+-                else
++                    nuance_packets_executed += m.cycleCounter;
++                } else
+                     m.cycleCounter = 0;
+             }
+ 
+diff --git a/src/video.cpp b/src/video.cpp
+index d7c4067..21326e9 100644
+--- a/src/video.cpp
++++ b/src/video.cpp
+@@ -1043,6 +1043,13 @@ void UpdateBufferLengths()
+   }
+ }
+ 
++// Frame counter for a frontend's FPS display: bumped whenever the game points
++// the main video channel at a (new) frame - VidChangeBase on the main channel,
++// or a VidConfig with a main channel. How fast this moves is the game's own
++// frame rate, which a slow emulation lowers even though the core still hands
++// over a frame every 1/60 s.
++extern "C" volatile uint32 nuance_video_flips = 0;
++
+ void VidQueryConfig(MPE &mpe)
+ {
+   VidDisplay * const displayStruct = (VidDisplay *)nuonEnv.GetPointerToMemory(mpe.mpeIndex, mpe.regs[0]);
+@@ -1078,6 +1085,8 @@ void VidConfig(MPE &mpe)
+ {
+   const uint32 display_addr = mpe.regs[0];
+   const uint32 main = mpe.regs[1];
++  if(main)
++    nuance_video_flips = nuance_video_flips + 1;
+   const uint32 osd = mpe.regs[2];
+   //const uint32 reserved = mpe.regs[3];
+ 
+@@ -1507,6 +1516,7 @@ void VidChangeBase(MPE &mpe)
+     switch(which)
+     {
+       case VID_CHANNEL_MAIN:
++        nuance_video_flips = nuance_video_flips + 1;
+         //valid channel, set dmaflags and base then return 1
+         structMainChannel.dmaflags = dmaflags;
+         structMainChannel.base = base;
