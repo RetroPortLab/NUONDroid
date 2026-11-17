@@ -85,7 +85,7 @@ class EmulatorActivity : Activity() {
             if (started) return
             started = true
 
-            val system = BiosInstaller.install(this@EmulatorActivity, prefs.coreCrt)
+            val system = BiosInstaller.install(this@EmulatorActivity, prefs.coreCrt, prefs.blockMode)
             val saves = File(getExternalFilesDir(null) ?: filesDir, "saves").apply { mkdirs() }
             val tmp = File(cacheDir, "tmp").apply { deleteRecursively(); mkdirs() }
             Native.init(system.absolutePath, saves.absolutePath, tmp.absolutePath)

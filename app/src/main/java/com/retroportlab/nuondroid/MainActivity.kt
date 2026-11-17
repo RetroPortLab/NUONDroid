@@ -237,6 +237,10 @@ class MainActivity : Activity() {
         list.addView(toggleRow("Core CRT shader", "NuanceResurrection's own CRT effect. Heavier on the GPU; takes effect next game",
             "coreCrt", false))
 
+        list.addView(ui.sectionTitle("Performance"))
+        list.addView(toggleRow("Faster CPU mode", "Runs NUON code in pre-decoded blocks. Turn off if a game misbehaves; takes effect next game",
+            "blockMode", true))
+
         list.addView(sectionAndControls())
 
         list.addView(ui.sectionTitle("Updates"))

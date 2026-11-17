@@ -105,16 +105,22 @@ idempotent):
   which is every commercial NUON disc) are read in place like an ISO; raw CD-style
   images (2352/2448-byte sectors) are converted to a temporary ISO first. Worth
   offering upstream.
-- `0004` forces the per-packet interpreter on builds with no native code emitter
-  (ARM, and x86-64 without asmjit), whatever `nuance.cfg` says. With
-  `[DynamicCompiler] Enabled` those builds use the IL block path, which stalls the
-  emulated MPEs: games boot to a black screen with no sound. Found by running the
-  core headless with nuontest, which freezes at "testing in" without this patch and
-  passes all instruction tests with it. Worth reporting upstream.
+- `0004` (removed in v0.05) forced the per-packet interpreter on builds without a JIT,
+  as a stop-gap for the block-mode stall that `0006` now fixes.
 - `0005` trims the interpreter's per-packet overhead without changing behaviour:
   stopped MPEs are no longer called every step, and the media-callback tick is
   advanced inline and only calls out when something is queued. Measured with
   callgrind on nuontest: 351 -> 221 host instructions per NUON packet.
+- `0006` fixes the IL block mode ([DynamicCompiler] on builds with no native emitter,
+  i.e. ARM and x86-64 without asmjit). That mode counts branch delay slots by their
+  packet-end markers, but FetchSuperBlock left NOP delay-slot packets out of the
+  block, so a taken branch exited with ecuSkipCounter at 1 and the packet after the
+  delay slots ran before the jump - corrupting registers until the MPE jumped to
+  garbage and hit the address-0 breakpoint (black screen, no sound). Those builds
+  now always keep both delay-slot packets, as the existing IL-downgrade path does.
+  nuontest passes all interpreter and compiler tests in block mode; ~9% fewer host
+  instructions per packet than the interpreter on its short blocks. Worth reporting
+  upstream. NUONDroid turns block mode on by default (Settings > Faster CPU mode).
 
 ## Licence
 

@@ -10,7 +10,7 @@ import java.io.File
  */
 object BiosInstaller {
     /** Returns the libretro "system directory". */
-    fun install(ctx: Context, coreCrt: Boolean): File {
+    fun install(ctx: Context, coreCrt: Boolean, blockMode: Boolean): File {
         val system = File(ctx.filesDir, "system")
         val dir = File(system, "nuance").apply { mkdirs() }
 
@@ -23,16 +23,15 @@ object BiosInstaller {
         }
 
         // Rewritten every launch so the settings screen is the single source of truth.
-        // DynamicCompiler must stay off: there is no ARM JIT, and asking for one
-        // drops the core into a block mode that stalls the NUON (black screen, no
-        // sound). patches/0004 also forces it off inside the core.
+        // DynamicCompiler on ARM means the IL block mode (there is no ARM JIT).
+        // Before patches/0006 that mode stalled the NUON (black screen, no sound).
         File(dir, "nuance.cfg").writeText(
             """
             [AudioInterrupts]
             Enabled
 
             [DynamicCompiler]
-            Disabled
+            ${if (blockMode) "Enabled" else "Disabled"}
 
             [CompilerConstantPropagation]
             Enabled

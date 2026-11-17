@@ -47,6 +47,14 @@ class Prefs private constructor(private val file: File) {
         get() = getInt("aspect", 0).coerceIn(0, SCREEN_NAMES.size - 1)
         set(v) = putInt("aspect", v)
 
+    /**
+     * Run straight-line NUON code as pre-decoded blocks (nuance.cfg DynamicCompiler)
+     * instead of one packet at a time. Faster; switch off if a game misbehaves.
+     */
+    var blockMode: Boolean
+        get() = getBool("blockMode", true)
+        set(v) = putBool("blockMode", v)
+
     /** The core's own approximate CRT post-process shader (nuance.cfg UseCRTshader). */
     var coreCrt: Boolean
         get() = getBool("coreCrt", false)

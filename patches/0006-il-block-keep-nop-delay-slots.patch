@@ -1,0 +1,45 @@
+diff --git a/src/SuperBlock.cpp b/src/SuperBlock.cpp
+index e06a07d..1e83bf1 100644
+--- a/src/SuperBlock.cpp
++++ b/src/SuperBlock.cpp
+@@ -1042,6 +1042,15 @@ int32 SuperBlock::FetchSuperBlock(uint32 packetAddress, bool &bContainsBranch)
+               //bForceILBlock = true;
+             }
+  
++            // The IL block path counts delay slots by their PACKETEND nodes
++            // (Handler_CheckECUSkipCounter), so it needs both delay-slot packets in
++            // the block even when they are NOPs - otherwise a taken branch leaves
++            // ecuSkipCounter at 1 on block exit and the dispatcher executes the
++            // packet AFTER the delay slots before branching. Builds with no native
++            // emitter (ARM, x86-64 without asmjit) only ever produce IL blocks, so
++            // always keep the delay slots there, exactly as the IL downgrade does.
++            const bool bKeepDelaySlotPackets = bForceILBlock || !ALLOW_NATIVE_CODE_EMIT;
++
+             if(!((packetDelaySlot1.packetInfo | packetDelaySlot2.packetInfo) & (PACKETINFO_MEMORY_IO|PACKETINFO_MEMORY_INDIRECT|PACKETINFO_ECU|PACKETINFO_NEVERCOMPILE)) 
+               || bForceILBlock)
+             {
+@@ -1057,20 +1066,20 @@ int32 SuperBlock::FetchSuperBlock(uint32 packetAddress, bool &bContainsBranch)
+               // Delay-slot packets are added unconditionally in IL-downgrade mode
+               // (even if NOP), so their PACKETEND nodes drive the IL path's
+               // Handler_CheckECUSkipCounter decrements at the right cadence
+-              if((!(packetDelaySlot1.packetInfo & PACKETINFO_NOP) && (packetDelaySlot1.nuanceCount != 0)) || bForceILBlock)
++              if((!(packetDelaySlot1.packetInfo & PACKETINFO_NOP) && (packetDelaySlot1.nuanceCount != 0)) || bKeepDelaySlotPackets)
+               {
+                 AddPacketToList(packetDelaySlot1,numPackets);              
+-                const bool bPacketAllowsNativeCode = AddInstructionsToList(packetDelaySlot1,&packets[numPackets],numInstructions,bForceILBlock);
++                const bool bPacketAllowsNativeCode = AddInstructionsToList(packetDelaySlot1,&packets[numPackets],numInstructions,bKeepDelaySlotPackets);
+                 bCanEmitNativeCode = bCanEmitNativeCode && bPacketAllowsNativeCode;
+                 numInstructions += (packetDelaySlot1.nuanceCount + 2);
+                 numPackets++;
+               }
+               packetCounter--;
+ 
+-              if((!(packetDelaySlot2.packetInfo & PACKETINFO_NOP) && (packetDelaySlot2.nuanceCount != 0)) || bForceILBlock)
++              if((!(packetDelaySlot2.packetInfo & PACKETINFO_NOP) && (packetDelaySlot2.nuanceCount != 0)) || bKeepDelaySlotPackets)
+               {
+                 AddPacketToList(packetDelaySlot2,numPackets);              
+-                const bool bPacketAllowsNativeCode = AddInstructionsToList(packetDelaySlot2,&packets[numPackets],numInstructions,bForceILBlock);
++                const bool bPacketAllowsNativeCode = AddInstructionsToList(packetDelaySlot2,&packets[numPackets],numInstructions,bKeepDelaySlotPackets);
+                 bCanEmitNativeCode = bCanEmitNativeCode && bPacketAllowsNativeCode;
+                 numInstructions += (packetDelaySlot2.nuanceCount + 2);
+                 numPackets++;
