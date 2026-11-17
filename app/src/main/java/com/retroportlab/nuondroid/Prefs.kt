@@ -84,6 +84,11 @@ class Prefs private constructor(private val file: File) {
         get() = getBool("vlmAuto", true)
         set(v) = putBool("vlmAuto", v)
 
+    /** Music (VLM): track and artist on screen. Index into [TRACK_NAMES]. */
+    var trackName: Int
+        get() = getInt("trackName", 1).coerceIn(0, TRACK_NAMES.size - 1)
+        set(v) = putInt("trackName", v)
+
     /** While casting to a TV: true = picture on the TV only, handheld screen dark. */
     var tvOnly: Boolean
         get() = getBool("tvOnly", true)
@@ -91,6 +96,7 @@ class Prefs private constructor(private val file: File) {
 
     companion object {
         val SCANLINE_NAMES = arrayOf("Off", "Light", "Strong")
+        val TRACK_NAMES = arrayOf("Off", "When the track changes", "Always")
         val SCANLINE_PCT = intArrayOf(0, 30, 60)
         val SCREEN_NAMES = arrayOf("4:3", "Stretch")
         val UPSCALE_NAMES = arrayOf("Soft", "Sharp pixels", "Smooth HD")

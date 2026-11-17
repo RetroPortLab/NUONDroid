@@ -130,12 +130,20 @@ what's playing, 20 a second. VLM still follows the music and the beat, a little
 more coarsely. It switches by itself when capture hears nothing but the Visualizer
 hears music.
 
+**Track names.** The track and artist show in the bottom-right corner: *Off*, *When
+the track changes* (6 seconds, the default) or *Always*. Set it in Settings, in the
+menu, or with L3 / R3. For your files they come from the tags (the file name if there
+are none). For Spotify and other apps, Android only shares what's playing with apps
+given **notification access**: Settings → Track names from Spotify → Allow, and turn
+on NUONDroid. It reads no notifications, only the now-playing info that unlocks.
+
 | Button | VLM |
 |---|---|
 | A / B (or d-pad right / left) | Next / previous effect |
 | X / Y | Random effect |
 | R1 / L1 (or d-pad down / up) | Next / previous track |
 | L2 / R2 | Effects change by themselves: on / off |
+| L3 / R3 (stick clicks) | Track name: off / when the track changes / always |
 | Select + Start, Back | Menu |
 
 How it works: the core loads the player's `pe` like a program and calls into it the way

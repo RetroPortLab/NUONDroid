@@ -60,5 +60,17 @@
             android:exported="false"
             android:process=":emu"
             android:foregroundServiceType="mediaProjection" />
+
+        <!-- Turned on by the user (notification access) so NUONDroid can show the track
+             another app is playing. It reads no notifications. -->
+        <service
+            android:name=".NowPlayingListener"
+            android:exported="true"
+            android:label="NUONDroid track names"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>

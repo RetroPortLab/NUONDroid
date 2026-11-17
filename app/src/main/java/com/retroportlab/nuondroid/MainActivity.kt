@@ -380,6 +380,15 @@ class MainActivity : Activity() {
         list.addView(ui.row("Player firmware", if (VlmFirmware.installed(this)) "Samsung DVD-N501 (installed)" else "Not installed: VLM needs it",
             if (VlmFirmware.installed(this)) "Replace" else "Install") { pickFirmware() })
         list.addView(ui.row("Music folder", prefs.musicDir.ifEmpty { "Not chosen" }, "Change") { pickMusicFolder() })
+        lateinit var trackRow: View
+        trackRow = ui.row("Show track name", "Track and artist, from your files' tags or from Spotify", Prefs.TRACK_NAMES[prefs.trackName]) {
+            prefs.trackName = (prefs.trackName + 1) % Prefs.TRACK_NAMES.size
+            ui.setRowValue(trackRow, Prefs.TRACK_NAMES[prefs.trackName])
+        }
+        list.addView(trackRow)
+        list.addView(ui.row("Track names from Spotify",
+            if (NowPlaying.allowed(this)) "Allowed" else "Android only shares what another app is playing if you turn on notification access for NUONDroid",
+            if (NowPlaying.allowed(this)) null else "Allow") { NowPlaying.openSettings(this) })
 
         list.addView(ui.sectionTitle("TV"))
         list.addView(ui.row("Cast to TV", "Chromecast or Google TV, picture and sound, also shown here. ${TvCast.status(this)}", "Open") {

@@ -66,6 +66,9 @@ class EmulatorActivity : Activity() {
     private var lastChange = 0L           // when the effect last changed (auto change)
     private var effectDir = 1
     private lateinit var infoView: TextView
+    private lateinit var trackView: TextView      // track / artist (Music)
+    private var trackText = ""
+    private var stopNowPlaying: (() -> Unit)? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -111,6 +114,16 @@ class EmulatorActivity : Activity() {
         }
         root.addView(infoView, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.START).apply {
             leftMargin = ui.dp(16f); bottomMargin = ui.dp(16f)
+        })
+        trackView = ui.text("", 15f, Ui.TEXT, true).apply {
+            setPadding(ui.dp(12f), ui.dp(8f), ui.dp(12f), ui.dp(8f))
+            gravity = Gravity.END
+            maxWidth = ui.dp(360f)
+            background = GradientDrawable().apply { setColor(0x99000000.toInt()); cornerRadius = ui.dp(8f).toFloat() }
+            visibility = View.GONE
+        }
+        root.addView(trackView, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.END).apply {
+            rightMargin = ui.dp(16f); bottomMargin = ui.dp(16f)
         })
         setContentView(root)
         hideSystemUi()
@@ -186,12 +199,14 @@ class EmulatorActivity : Activity() {
             val tvH = minOf(mode.physicalWidth, mode.physicalHeight)
             if (tvH > 480) glView.holder.setFixedSize((480 * tvW / tvH + 1) and 1.inv(), 480)
             tvRoot.addView(glView, FrameLayout.LayoutParams(-1, -1))
+            moveTrackView(tvRoot)      // the track name goes with the picture
             p.setContentView(tvRoot)
             p.setOnDismissListener { uiHandler.post { updateTv() } }
             try {
                 p.show()
                 presentation = p
             } catch (e: WindowManager.InvalidDisplayException) {
+                moveTrackView(root)
                 (glView.parent as? ViewGroup)?.removeView(glView)
                 glView = newGlView(this)
                 root.addView(glView, 0, FrameLayout.LayoutParams(-1, -1))
@@ -199,6 +214,7 @@ class EmulatorActivity : Activity() {
         } else {
             glView = newGlView(this)
             root.addView(glView, 0, FrameLayout.LayoutParams(-1, -1))
+            moveTrackView(root)
         }
         val onTv = presentation != null
         currentTvId = presentation?.display?.displayId
@@ -209,6 +225,14 @@ class EmulatorActivity : Activity() {
             screenBrightness = if (onTv) 0.01f else WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
         }
         if (!menuOpen) glView.onResume()
+    }
+
+    private fun moveTrackView(to: FrameLayout) {
+        if (trackView.parent === to) return
+        (trackView.parent as? ViewGroup)?.removeView(trackView)
+        to.addView(trackView, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.END).apply {
+            rightMargin = ui.dp(16f); bottomMargin = ui.dp(16f)
+        })
     }
 
     private inner class Renderer : GLSurfaceView.Renderer {
@@ -282,7 +306,10 @@ class EmulatorActivity : Activity() {
         if (music != null || live != null) return
         if (liveMode) { startLive(); return }
         val start = intent.getIntExtra(EXTRA_START, 0).coerceIn(0, tracks.size - 1)
-        music = MusicPlayer(tracks, start) { _, f -> runOnUiThread { showInfo("\u266A  " + f.nameWithoutExtension) } }
+        music = MusicPlayer(tracks, start) { _, f ->
+            val (title, artist) = NowPlaying.fromFile(f)       // music thread: reads the file's tags
+            runOnUiThread { setTrack(title, artist) }
+        }
             .also { it.start() }
         lastChange = System.currentTimeMillis()
         uiHandler.post(vlmWatcher)
@@ -299,12 +326,48 @@ class EmulatorActivity : Activity() {
         val code = intent.getIntExtra(EXTRA_PROJ_CODE, 0)
         if (data != null) CaptureService.start(this, code, data) { p -> if (live === l) l.start(p) }
         else l.start(null)
+        watchNowPlaying()
+    }
+
+    /** Live music: the playing app's track and artist, if the user allowed it (notification access). */
+    private fun watchNowPlaying() {
+        if (!liveMode || live == null || stopNowPlaying != null || !NowPlaying.allowed(this)) return
+        stopNowPlaying = NowPlaying.watch(this) { t, a -> setTrack(t, a) }
+    }
+
+    private val hideTrack = Runnable { if (prefs.trackName != 2) trackView.visibility = View.GONE }
+
+    /** A new track started (title null = unknown). */
+    private fun setTrack(title: String?, artist: String?) {
+        trackText = when {
+            title.isNullOrBlank() -> ""
+            artist.isNullOrBlank() -> "\u266A  $title"
+            else -> "\u266A  $title\n$artist"
+        }
+        showTrack(true)
+    }
+
+    /** Off: never. When the track changes: for 6 s after a change. Always: while known. */
+    private fun showTrack(changed: Boolean) {
+        trackView.text = trackText
+        uiHandler.removeCallbacks(hideTrack)
+        val mode = prefs.trackName
+        val show = trackText.isNotEmpty() && (mode == 2 || (mode == 1 && changed))
+        trackView.visibility = if (show) View.VISIBLE else View.GONE
+        if (show && mode == 1) uiHandler.postDelayed(hideTrack, 6000)
+    }
+
+    private fun cycleTrackName(): String {
+        prefs.trackName = (prefs.trackName + 1) % Prefs.TRACK_NAMES.size
+        showTrack(prefs.trackName != 0)
+        return Prefs.TRACK_NAMES[prefs.trackName]
     }
 
     private fun nextTrack() { music?.next(); live?.mediaKey(KeyEvent.KEYCODE_MEDIA_NEXT) }
     private fun previousTrack() { music?.previous(); live?.mediaKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS) }
 
     private fun stopLive() {
+        stopNowPlaying?.invoke(); stopNowPlaying = null
         live?.stop(); live = null
         CaptureService.stop(this)
     }
@@ -361,6 +424,7 @@ class EmulatorActivity : Activity() {
             KeyEvent.KEYCODE_BUTTON_X, KeyEvent.KEYCODE_BUTTON_Y -> { { randomEffect() } }
             KeyEvent.KEYCODE_BUTTON_R1, KeyEvent.KEYCODE_DPAD_DOWN -> { { nextTrack() } }
             KeyEvent.KEYCODE_BUTTON_L1, KeyEvent.KEYCODE_DPAD_UP -> { { previousTrack() } }
+            KeyEvent.KEYCODE_BUTTON_THUMBL, KeyEvent.KEYCODE_BUTTON_THUMBR -> { { showInfo("Track name: " + cycleTrackName()) } }
             KeyEvent.KEYCODE_BUTTON_R2, KeyEvent.KEYCODE_BUTTON_L2 -> { {
                 prefs.vlmAuto = !prefs.vlmAuto
                 lastChange = System.currentTimeMillis()
@@ -402,8 +466,17 @@ class EmulatorActivity : Activity() {
                 ui.setRowValue(autoRow, if (prefs.vlmAuto) "On" else "Off")
             }
             panel.addView(autoRow)
+            lateinit var trackRow: View
+            trackRow = ui.row("Show track name", null, Prefs.TRACK_NAMES[prefs.trackName]) { ui.setRowValue(trackRow, cycleTrackName()) }
+            panel.addView(trackRow)
+            if (liveMode && !NowPlaying.allowed(this)) {
+                panel.addView(ui.row("Track names from Spotify",
+                    "Android only shares what another app is playing if you turn on notification access for NUONDroid", "Allow") {
+                    NowPlaying.openSettings(this)
+                })
+            }
             panel.addView(ui.row("Controls",
-                "A / B: next / previous effect  ·  X / Y: random effect\nR1 / L1: next / previous track  ·  L2 / R2: auto change on/off", null) { })
+                "A / B: next / previous effect  ·  X / Y: random effect\nR1 / L1: next / previous track  ·  L2 / R2: auto change on/off\nL3 / R3: track name off / on change / always", null) { })
         } else panel.addView(ui.row("Reset game", null, null) {
             glView.queueEvent { Native.reset() }
             closePauseMenu()
@@ -533,6 +606,7 @@ class EmulatorActivity : Activity() {
         super.onResume()
         displayManager.registerDisplayListener(displayListener, uiHandler)
         updateTv()
+        watchNowPlaying()
         hideSystemUi()
         applyFpsOverlay()
         glView.onResume()
