@@ -86,10 +86,10 @@ index 4e0fea9..f838f75 100644
    {
 diff --git a/src/vlmhost.cpp b/src/vlmhost.cpp
 new file mode 100644
-index 0000000..9cda600
+index 0000000..3233797
 --- /dev/null
 +++ b/src/vlmhost.cpp
-@@ -0,0 +1,223 @@
+@@ -0,0 +1,269 @@
 +// NUONDroid: VLM host.
 +//
 +// Runs the playback engine ("pe") of a NUON DVD player's firmware on its own and
@@ -142,6 +142,10 @@ index 0000000..9cda600
 +constexpr uint32 VLM_EFFECT_NOW = 0x80630228;  // current effect number
 +constexpr uint32 VLM_EFFECTS    = 0x80637EA4;  // number of effects
 +constexpr uint32 MPE3_FIELDS    = 0x824;       // MPE3 DTRAM: video field counter VLM paces on
++constexpr uint32 MPE3_TIME      = 0x800;       // MPE3 DTRAM: two 90 kHz tick counters (timer0 interrupt)
++constexpr uint32 TICKS_PER_FRAME = 1500;       // 90 kHz / 60 Hz
++constexpr uint32 VLM_ONSET      = 0x805D84DC;  // onset detector(bass, treble, level), fed by the CD-audio
++                                               // path's "CD Beat" messages; drives kvlmBeatDetect
 +
 +constexpr uint32 TRAP  = 0x807FF000;
 +constexpr uint32 STACK = 0x807F8000;
@@ -158,6 +162,10 @@ index 0000000..9cda600
 +int g_step = -1;            // index into SEQUENCE; SEQ_LEN = running (sleep loop)
 +bool g_inCall = false;
 +std::atomic<int> g_wantEffect{-1};
++uint32 g_time = 0;          // where the 90 kHz clock should be
++struct Onset { int32 bass, treble, level; };
++Onset g_onset[16];          // queued detector inputs (four per 1/60 s of music)
++std::atomic<uint32> g_onsetWr{0}, g_onsetRd{0};
 +uint32 g_audio[128];        // host order, L16|R16
 +std::atomic<bool> g_audioNew{false};
 +
@@ -194,6 +202,7 @@ index 0000000..9cda600
 +  const uint8* halt = (const uint8*)nuonEnv.GetPointerToMemory(3, PE_HALT_PACKET, false);
 +  memcpy(trap, halt, 8);
 +  g_step = 0;
++  g_time = 0;
 +  StartCall(SEQUENCE[0].addr, SEQUENCE[0].args, SEQUENCE[0].nargs);
 +}
 +
@@ -205,6 +214,18 @@ index 0000000..9cda600
 +  // Field counter.
 +  uint8* f = nuonEnv.mpe[3].dtrom + MPE_DTRAM_OFFSET + MPE3_FIELDS;
 +  Wr32(f, Rd32(f) + 1);
++
++  // 90 kHz clock. pe's timer0 interrupt can only fire once per core timer check,
++  // far below 90 kHz, so top the counters up to real time each frame (VLM's beat
++  // tracking, tempo and timeouts are all in these ticks).
++  uint8* t = nuonEnv.mpe[3].dtrom + MPE_DTRAM_OFFSET + MPE3_TIME;
++  const uint32 now = Rd32(t);
++  g_time += TICKS_PER_FRAME;
++  if ((int32)(g_time - now) > 0) {
++    const uint32 add = g_time - now;
++    Wr32(t, now + add);
++    Wr32(t + 4, Rd32(t + 4) + add);
++  } else g_time = now;
 +
 +  // Audio window.
 +  if (g_audioNew.exchange(false)) {
@@ -244,6 +265,18 @@ index 0000000..9cda600
 +      m.regs[0] = (uint32)e;
 +      m.rz = PE_SLEEP_LOOP;
 +      m.pcexec = m.pcfetchnext = VLM_EFFECT;
++      return true;
++    }
++    // Music energy for VLM's beat detection, as the CD-audio path would report it.
++    const uint32 rd = g_onsetRd.load(std::memory_order_relaxed);
++    if (rd != g_onsetWr.load(std::memory_order_acquire)) {
++      const Onset& o = g_onset[rd & 15];
++      m.regs[0] = (uint32)o.bass;
++      m.regs[1] = (uint32)o.treble;
++      m.regs[2] = (uint32)o.level;
++      g_onsetRd.store(rd + 1, std::memory_order_release);
++      m.rz = PE_SLEEP_LOOP;
++      m.pcexec = m.pcfetchnext = VLM_ONSET;
 +      return true;
 +    }
 +  }
@@ -292,6 +325,15 @@ index 0000000..9cda600
 +  g_audioNew.store(true);
 +}
 +
++// Energy of the music just played (a few hundred reports a second): low band, high band, overall level.
++// Feeds VLM's own onset / beat detector; only ratios matter, keep values in 1..65535.
++void nuance_vlm_set_levels(int bass, int treble, int level) {
++  const uint32 wr = g_onsetWr.load(std::memory_order_relaxed);
++  if (wr - g_onsetRd.load(std::memory_order_acquire) >= 16) return;  // engine busy: drop
++  g_onset[wr & 15] = { bass, treble, level };
++  g_onsetWr.store(wr + 1, std::memory_order_release);
++}
++
 +void nuance_vlm_set_effect(int n) { if (n >= 0) g_wantEffect.store(n); }
 +
 +int nuance_vlm_effect(void) { return g_step >= SEQ_LEN ? (int)Rd32(SysPtr(VLM_EFFECT_NOW)) : -1; }
@@ -311,5 +353,9 @@ index 0000000..9cda600
 +  *w = 180; *h = 120; *stride = 360;
 +  return nuonEnv.mainBusDRAM + (a & MAIN_BUS_VALID_MEMORY_MASK);
 +}
++
++// Diagnostics: read / write a 32-bit word of system-bus memory (big-endian, as NUON sees it).
++uint32_t nuance_vlm_peek(uint32_t addr) { return Rd32(SysPtr(addr)); }
++void nuance_vlm_poke(uint32_t addr, uint32_t v) { Wr32(SysPtr(addr), v); }
 +
 +}  // extern "C"

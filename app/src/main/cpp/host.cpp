@@ -13,6 +13,7 @@
 #include <aaudio/AAudio.h>
 
 #include <atomic>
+#include <cmath>
 #include <mutex>
 #include <cstdarg>
 #include <cstdint>
@@ -60,6 +61,7 @@ GLuint g_fbo = 0, g_tex = 0, g_prog = 0;
 extern "C" {
 extern int nuance_vlm_mode;
 void nuance_vlm_set_audio(const int16_t* lr);
+void nuance_vlm_set_levels(int bass, int treble, int level);
 void nuance_vlm_set_effect(int n);
 int nuance_vlm_effect(void);
 int nuance_vlm_effect_count(void);
@@ -205,6 +207,50 @@ void vlmFeedWindow() {
         win[i * 2 + 1] = valid ? g_ring[s + 1] : 0;
     }
     nuance_vlm_set_audio(win);
+
+    // What played since last time, for VLM's beat detection: onset strength in a bass
+    // band (kick drums) and a treble band (snares, hats), and the overall level. VLM
+    // compares them with its own running averages, so only ratios matter.
+    static uint32_t last = 0;
+    static float lpBass = 0, lpMid = 0, envBass = 0, envTreble = 0, envAll = 0, avgBass = 0, avgTreble = 0;
+    uint32_t from = last;
+    last = rd;
+    if (rd - from > 4096 || rd < from) from = rd >= 4096 ? rd - 4096 : 0;   // skipped / flushed
+    const uint32_t n = rd - from;
+    if (n == 0) return;
+    const float rate = (float)g_audioRate.load();
+    const float aBass = 1.0f - expf(-2.0f * 3.14159265f * 150.0f / rate);
+    const float aMid = 1.0f - expf(-2.0f * 3.14159265f * 2500.0f / rate);
+    const float kBass = 1.0f - expf(-1.0f / (0.030f * rate));     // 30 ms envelope
+    const float kTreble = 1.0f - expf(-1.0f / (0.010f * rate));   // 10 ms
+    auto clampv = [](double v) { return (int)(v < 0 ? 0 : v > 65535 ? 65535 : v); };
+    const float kAvg = 1.0f - expf(-1.0f / (0.5f * 240.0f));           // per report, 0.5 s
+    // Four reports per frame (~240 a second): VLM's detector smooths and decays per
+    // report, and its constants suit a few hundred reports a second.
+    constexpr uint32_t PARTS = 4;
+    for (uint32_t part = 0; part < PARTS; ++part) {
+        const uint32_t a = from + n * part / PARTS, b = from + n * (part + 1) / PARTS;
+        if (a == b) continue;
+        for (uint32_t f = a; f != b; ++f) {
+            const uint32_t s2 = (f & (RING_FRAMES - 1)) * 2;
+            const float x = 0.5f * ((float)g_ring[s2] + (float)g_ring[s2 + 1]);
+            lpBass += aBass * (x - lpBass);
+            lpMid += aMid * (x - lpMid);
+            const float hi = x - lpMid;
+            // Envelopes rather than per-window sums, so a steady bass note doesn't
+            // flicker with its own waveform and look like a string of beats.
+            envBass += kBass * (lpBass * lpBass - envBass);
+            envTreble += kTreble * (hi * hi - envTreble);
+            envAll += kBass * (fabsf(x) - envAll);
+        }
+        // Report each band's level above its own recent average (half a second): a
+        // kick or snare stands out, a steady note or drone gives 0. VLM's detector
+        // treats any rise over 0 as a candidate, so steady sound must read 0.
+        const float rb = sqrtf(envBass), rt = sqrtf(envTreble);
+        avgBass += kAvg * (rb - avgBass);
+        avgTreble += kAvg * (rt - avgTreble);
+        nuance_vlm_set_levels(clampv((rb - avgBass * 1.1f) * 2), clampv((rt - avgTreble * 1.1f) * 2), clampv(envAll * 2) + 1);
+    }
 }
 
 // Latest VLM frame (big-endian 32-bit YCrCb) -> RGBA texture.

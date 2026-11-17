@@ -105,7 +105,14 @@ audio player, EnterVLM, VLMChangeEffect - on MPE3, with VLM's renderer running o
 The music is decoded on the Android side, played through AAudio, and the last 128
 played samples are written each frame where VLM reads its audio. VLM draws 180×120
 frames (the player scaled them up too) at about 20 fps. Effects that stay black with
-your music are skipped. See `patches/0008` and `src/vlmhost.cpp` for what the
+your music are skipped.
+
+Beat detection is VLM's own. In the player it's fed by the CD-audio path ("CD Beat"
+reports); NUONDroid sends the same kind of report, about 240 a second, from the music
+it plays: how far a bass band (kick drums) and a treble band (snares, hats) rise above
+their recent average, plus the overall level. VLM's detector, tempo tracker and the
+effects that follow the beat take it from there. Steady sound (drones, held notes)
+reads as no beat. See `patches/0008` and `src/vlmhost.cpp` for what the
 emulator adds for it.
 
 ## Performance: read this first
@@ -166,7 +173,8 @@ idempotent):
 - `0008` adds the VLM host (`src/vlmhost.cpp`): with `nuance_vlm_mode` set it runs a NUON
   player's playback engine on its own and drives VLM-2 through it. It also adds what that
   firmware needs and the HLE BIOS doesn't provide - comm-bus answers from the VDG, DMA
-  controller and misc-IO system timers, the HAL memcpy, and the video field counter.
+  controller and misc-IO system timers, the HAL memcpy, the video field counter, a
+  real-time 90 kHz clock, and the "CD Beat" reports VLM's beat detection runs on.
   Nothing changes for games (everything is behind the flag).
 
 ## Licence
