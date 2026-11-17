@@ -69,6 +69,7 @@ int nuance_vlm_effect_count(void);
 const uint8_t* nuance_vlm_frame(int* w, int* h, int* stride);
 }
 bool g_vlm = false;
+std::atomic<int> g_fieldsPerFrame{1};
 GLuint g_vlmTex = 0;
 int g_vlmW = 180, g_vlmH = 120;
 std::atomic<int> g_vlmLuma{0};          // mean luma of the last VLM frame, 0..255
@@ -549,8 +550,25 @@ JNIEXPORT void JNICALL JNI(frame)(JNIEnv*, jobject) {
     if (!g_glReady) return;
     if (g_loaded && !g_paused.load()) {
         g_haveFrame = false;
-        if (g_vlm) vlmFeedWindow();
-        retro_run();
+        // Normally one 60 Hz field per drawn frame. When casting, two fields per frame:
+        // the emulation still runs at full speed, but the screen gets a steady 30 fps,
+        // which is what the cast stream carries anyway.
+        const int fields = g_fieldsPerFrame.load();
+        if (g_vlm && fields > 1) {
+            // VLM keeps its own time and does a slice of work per core run, and its
+            // beat reports go out per run: keep running it for the whole 1/30 s, so it
+            // gets the same work and reports as at 60 fps, then show one picture.
+            static int64_t until = 0;
+            const int64_t now = nowUs();
+            if (until == 0 || now - until > 33333 || until - now > 33333) until = now;
+            until += 33333;
+            do { vlmFeedWindow(); retro_run(); } while (nowUs() < until && !g_paused.load());
+        } else {
+            for (int i = 0; i < fields && !g_paused.load(); ++i) {
+                if (g_vlm) vlmFeedWindow();
+                retro_run();
+            }
+        }
         if (g_vlm) vlmUpload();
         // The core leaves arbitrary GL state behind; blit() sets what it needs.
     }
@@ -560,9 +578,23 @@ JNIEXPORT void JNICALL JNI(frame)(JNIEnv*, jobject) {
     // Swap interval is 0 (see EmulatorActivity), so nothing else slows this loop
     // down while the core isn't running: don't spin redrawing the paused frame.
     if (g_paused.load()) usleep(16000);
+
+    // Casting, games: hold a steady 30 fps for the encoder (a fast device would
+    // otherwise run ahead; the core's own audio sync keeps speed right).
+    if (g_fieldsPerFrame.load() > 1 && !g_vlm && !g_paused.load()) {
+        static int64_t next = 0;
+        const int64_t period = 33333;
+        const int64_t now = nowUs();
+        if (next == 0 || now - next > period || next - now > period) next = now;
+        if (next > now) usleep((useconds_t)(next - now));
+        next += period;
+    }
 }
 
 JNIEXPORT void JNICALL JNI(setInput)(JNIEnv*, jobject, jint mask) { g_input.store((uint32_t)mask); }
+
+// Any thread: emulated 60 Hz fields per drawn frame (1 = 60 fps, 2 = steady 30 fps).
+JNIEXPORT void JNICALL JNI(setFieldsPerFrame)(JNIEnv*, jobject, jint n) { g_fieldsPerFrame.store(n < 1 ? 1 : n > 2 ? 2 : n); }
 
 JNIEXPORT void JNICALL JNI(setOptions)(JNIEnv*, jobject, jint scanlinesPct, jint aspectMode, jint filter) {
     g_scanlinesPct.store(scanlinesPct < 0 ? 0 : scanlinesPct > 100 ? 100 : scanlinesPct);

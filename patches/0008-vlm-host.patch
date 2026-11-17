@@ -86,10 +86,10 @@ index 4e0fea9..f838f75 100644
    {
 diff --git a/src/vlmhost.cpp b/src/vlmhost.cpp
 new file mode 100644
-index 0000000..f868ba0
+index 0000000..e06b638
 --- /dev/null
 +++ b/src/vlmhost.cpp
-@@ -0,0 +1,318 @@
+@@ -0,0 +1,329 @@
 +// NUONDroid: VLM host.
 +//
 +// Runs the playback engine ("pe") of a NUON DVD player's firmware on its own and
@@ -120,6 +120,7 @@ index 0000000..f868ba0
 +#include <cstdlib>
 +#include <cstring>
 +#include <atomic>
++#include <chrono>
 +
 +extern NuonEnvironment nuonEnv;
 +
@@ -146,7 +147,6 @@ index 0000000..f868ba0
 +constexpr uint32 VLM_EFFECTS    = 0x80637EA4;  // number of effects
 +constexpr uint32 MPE3_FIELDS    = 0x824;       // MPE3 DTRAM: video field counter VLM paces on
 +constexpr uint32 MPE3_TIME      = 0x800;       // MPE3 DTRAM: two 90 kHz tick counters (timer0 interrupt)
-+constexpr uint32 TICKS_PER_FRAME = 1500;       // 90 kHz / 60 Hz
 +constexpr uint32 VLM_ONSET      = 0x805D84DC;  // onset detector(bass, treble, level), fed by the CD-audio
 +                                               // path's "CD Beat" messages; drives kvlmBeatDetect
 +
@@ -166,6 +166,8 @@ index 0000000..f868ba0
 +bool g_inCall = false;
 +std::atomic<int> g_wantEffect{-1};
 +uint32 g_time = 0;          // where the 90 kHz clock should be
++uint64_t g_fields = 0;      // video fields counted so far
++std::chrono::steady_clock::time_point g_start;
 +struct Onset { int32 bass, treble, level; };
 +Onset g_onset[16];          // queued detector inputs (four per 1/60 s of music)
 +std::atomic<uint32> g_onsetWr{0}, g_onsetRd{0};
@@ -255,6 +257,8 @@ index 0000000..f868ba0
 +  memcpy(trap, halt, 8);
 +  g_step = 0;
 +  g_time = 0;
++  g_fields = 0;
++  g_start = std::chrono::steady_clock::now();
 +  StartCall(SEQUENCE[0].addr, SEQUENCE[0].args, SEQUENCE[0].nargs);
 +}
 +
@@ -263,16 +267,23 @@ index 0000000..f868ba0
 +  if (g_step < 0) return;
 +  MPE& m = nuonEnv.mpe[3];
 +
-+  // Field counter.
++  // Both clocks follow real time, however often the frontend runs the core (once
++  // per drawn frame at 60 fps, twice at 30 fps, less if the device is slow), so VLM
++  // stays in step with the music.
++  const uint64_t us = (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(
++      std::chrono::steady_clock::now() - g_start).count();
++
++  // Field counter: 60 a second.
++  const uint64_t fields = us * 60 / 1000000;
 +  uint8* f = nuonEnv.mpe[3].dtrom + MPE_DTRAM_OFFSET + MPE3_FIELDS;
-+  Wr32(f, Rd32(f) + 1);
++  if (fields > g_fields) { Wr32(f, Rd32(f) + (uint32)(fields - g_fields)); g_fields = fields; }
 +
 +  // 90 kHz clock. pe's timer0 interrupt can only fire once per core timer check,
-+  // far below 90 kHz, so top the counters up to real time each frame (VLM's beat
-+  // tracking, tempo and timeouts are all in these ticks).
++  // far below 90 kHz, so top the counters up to real time (VLM's beat tracking,
++  // tempo and timeouts are all in these ticks).
 +  uint8* t = nuonEnv.mpe[3].dtrom + MPE_DTRAM_OFFSET + MPE3_TIME;
 +  const uint32 now = Rd32(t);
-+  g_time += TICKS_PER_FRAME;
++  g_time = (uint32)(us * 90 / 1000);
 +  if ((int32)(g_time - now) > 0) {
 +    const uint32 add = g_time - now;
 +    Wr32(t, now + add);

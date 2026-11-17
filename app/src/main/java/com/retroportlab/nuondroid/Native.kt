@@ -19,6 +19,8 @@ object Native {
     external fun setInput(mask: Int)
     external fun setOptions(scanlinesPct: Int, aspectMode: Int, filter: Int)
     external fun setPaused(paused: Boolean)
+    /** Emulated 60 Hz fields per drawn frame: 1 = 60 fps, 2 = steady 30 fps (casting). */
+    external fun setFieldsPerFrame(n: Int)
 
     /** [screen fps, game fps, NUON instruction packets per second in millions], updated once a second. */
     external fun getStats(): FloatArray

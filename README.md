@@ -92,6 +92,12 @@ get mirroring either way. A display plugged in over USB-C works the same way.
 The picture moves between screens without restarting anything: the emulator keeps
 one GL context and hands it from the handheld's view to the TV's.
 
+Over a wireless cast, the TV picture is drawn at 480 lines (the NUON's own
+resolution) instead of the TV's full resolution, and the frame rate is held at a
+steady 30 fps: each drawn frame carries two 60 Hz fields, so games run at full speed.
+Wireless cast streams are 30 fps at best, so this saves encoding work without
+losing anything. A TV on a cable keeps 60 fps.
+
 ## Music (VLM)
 
 NUONDroid can play your music with **VLM-2**, the Virtual Light Machine Jeff Minter

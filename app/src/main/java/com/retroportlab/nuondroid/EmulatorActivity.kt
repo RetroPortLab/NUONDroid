@@ -134,6 +134,12 @@ class EmulatorActivity : Activity() {
         if (!prefs.tvOnly) null
         else displayManager.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION).firstOrNull { it.isValid }
 
+    /** A cast / wireless display rather than one on a cable (HDMI, USB-C), which can do 60 fps. */
+    private fun isWireless(d: Display): Boolean {
+        val n = d.name.lowercase()
+        return !(n.contains("hdmi") || n.contains("usb") || n.contains("displayport") || n.contains("dp "))
+    }
+
     private val displayListener = object : DisplayManager.DisplayListener {
         override fun onDisplayAdded(id: Int) = updateTv()
         override fun onDisplayRemoved(id: Int) = updateTv()
@@ -145,6 +151,11 @@ class EmulatorActivity : Activity() {
         if (isFinishing || isDestroyed) return
         val want = tvDisplay()
         val wantId = want?.displayId
+        // Casting streams about 30 fps: draw a steady 30 (two fields per frame) rather
+        // than 60 the encoder drops unevenly. The emulation still runs at full speed.
+        val casting = TvCast.castingTo(this) != null ||
+            displayManager.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION).any { isWireless(it) }
+        Native.setFieldsPerFrame(if (casting) 2 else 1)
         val settled = if (wantId == null) currentTvId == null else currentTvId == wantId && presentation?.isShowing == true
         if (settled) return
 
@@ -163,6 +174,13 @@ class EmulatorActivity : Activity() {
             p.window?.addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             val tvRoot = FrameLayout(p.context).apply { setBackgroundColor(0xFF000000.toInt()) }
             glView = newGlView(p.context)
+            // Draw at the NUON's own 480 lines (widened to the TV's shape) and let the
+            // display hardware scale up: there's no more detail to show, and the
+            // handheld has less to draw while it also encodes the cast stream.
+            val mode = want.mode
+            val tvW = maxOf(mode.physicalWidth, mode.physicalHeight)
+            val tvH = minOf(mode.physicalWidth, mode.physicalHeight)
+            if (tvH > 480) glView.holder.setFixedSize((480 * tvW / tvH + 1) and 1.inv(), 480)
             tvRoot.addView(glView, FrameLayout.LayoutParams(-1, -1))
             p.setContentView(tvRoot)
             p.setOnDismissListener { uiHandler.post { updateTv() } }
