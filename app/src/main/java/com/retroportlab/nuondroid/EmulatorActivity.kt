@@ -20,6 +20,7 @@ import android.view.Gravity
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.os.SystemClock
 import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsController
@@ -419,20 +420,55 @@ class EmulatorActivity : Activity() {
         uiHandler.postDelayed(hideInfo, 3000)
     }
 
+    private fun toggleAuto() {
+        prefs.vlmAuto = !prefs.vlmAuto
+        lastChange = System.currentTimeMillis()
+        showInfo(if (prefs.vlmAuto) "Effects change by themselves" else "Effects stay until you change them")
+    }
+
+    // Triggers arrive as keys, as analog axes, or both: one press acts once.
+    private val triggerAt = LongArray(2)
+    private val triggerDown = BooleanArray(2)
+    private fun trigger(right: Boolean) {
+        val i = if (right) 1 else 0
+        val now = SystemClock.uptimeMillis()
+        if (now - triggerAt[i] < 300) return
+        triggerAt[i] = now
+        if (prefs.vlmTriggerSkip) { if (right) nextTrack() else previousTrack() } else toggleAuto()
+    }
+    private fun shoulder(right: Boolean) {
+        if (prefs.vlmTriggerSkip) toggleAuto() else if (right) nextTrack() else previousTrack()
+    }
+
+    /** VLM mode: analog triggers (handhelds that don't also send L2 / R2 keys). */
+    private fun vlmMotion(e: MotionEvent) {
+        val lt = maxOf(e.getAxisValue(MotionEvent.AXIS_LTRIGGER), e.getAxisValue(MotionEvent.AXIS_BRAKE))
+        val rt = maxOf(e.getAxisValue(MotionEvent.AXIS_RTRIGGER), e.getAxisValue(MotionEvent.AXIS_GAS))
+        for ((i, v) in floatArrayOf(lt, rt).withIndex()) {
+            if (!triggerDown[i] && v > 0.6f) { triggerDown[i] = true; trigger(i == 1) }
+            else if (triggerDown[i] && v < 0.3f) triggerDown[i] = false
+        }
+    }
+
+    private fun skipName() = if (prefs.vlmTriggerSkip) "Triggers (R2 / L2)" else "Shoulders (R1 / L1)"
+    private fun controlsText(): String {
+        val (skip, auto) = if (prefs.vlmTriggerSkip) "R2 / L2" to "R1 / L1" else "R1 / L1" to "R2 / L2"
+        return "A / B: next / previous effect  ·  X / Y: random effect\n$skip: next / previous track  ·  $auto: auto change on/off\nL3 / R3: track name off / on change / always"
+    }
+
     /** VLM controls; returns true if the key was used. */
     private fun vlmKey(code: Int, up: Boolean): Boolean {
         val action: (() -> Unit)? = when (code) {
             KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_DPAD_RIGHT -> { { stepEffect(1) } }
             KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_DPAD_LEFT -> { { stepEffect(-1) } }
             KeyEvent.KEYCODE_BUTTON_X, KeyEvent.KEYCODE_BUTTON_Y -> { { randomEffect() } }
-            KeyEvent.KEYCODE_BUTTON_R1, KeyEvent.KEYCODE_DPAD_DOWN -> { { nextTrack() } }
-            KeyEvent.KEYCODE_BUTTON_L1, KeyEvent.KEYCODE_DPAD_UP -> { { previousTrack() } }
+            KeyEvent.KEYCODE_DPAD_DOWN -> { { nextTrack() } }
+            KeyEvent.KEYCODE_DPAD_UP -> { { previousTrack() } }
+            KeyEvent.KEYCODE_BUTTON_R1 -> { { shoulder(true) } }
+            KeyEvent.KEYCODE_BUTTON_L1 -> { { shoulder(false) } }
             KeyEvent.KEYCODE_BUTTON_THUMBL, KeyEvent.KEYCODE_BUTTON_THUMBR -> { { showInfo("Track name: " + cycleTrackName()) } }
-            KeyEvent.KEYCODE_BUTTON_R2, KeyEvent.KEYCODE_BUTTON_L2 -> { {
-                prefs.vlmAuto = !prefs.vlmAuto
-                lastChange = System.currentTimeMillis()
-                showInfo(if (prefs.vlmAuto) "Effects change by themselves" else "Effects stay until you change them")
-            } }
+            KeyEvent.KEYCODE_BUTTON_R2 -> { { trigger(true) } }
+            KeyEvent.KEYCODE_BUTTON_L2 -> { { trigger(false) } }
             else -> null
         }
         if (action == null) return false
@@ -472,14 +508,22 @@ class EmulatorActivity : Activity() {
             lateinit var trackRow: View
             trackRow = ui.row("Show track name", null, Prefs.TRACK_NAMES[prefs.trackName]) { ui.setRowValue(trackRow, cycleTrackName()) }
             panel.addView(trackRow)
+            lateinit var skipRow: View
+            lateinit var controlsRow: View
+            skipRow = ui.row("Skip tracks with", null, skipName()) {
+                prefs.vlmTriggerSkip = !prefs.vlmTriggerSkip
+                ui.setRowValue(skipRow, skipName())
+                ui.setRowSubtitle(controlsRow, controlsText())
+            }
+            panel.addView(skipRow)
             if (liveMode && !NowPlaying.allowed(this)) {
                 panel.addView(ui.row("Track names from Spotify",
                     "Notification access for NUONDroid, or turn on Device Broadcast Status in Spotify's settings", "Allow") {
                     NowPlaying.openSettings(this)
                 })
             }
-            panel.addView(ui.row("Controls",
-                "A / B: next / previous effect  ·  X / Y: random effect\nR1 / L1: next / previous track  ·  L2 / R2: auto change on/off\nL3 / R3: track name off / on change / always", null) { })
+            controlsRow = ui.row("Controls", controlsText(), null) { }
+            panel.addView(controlsRow)
         } else panel.addView(ui.row("Reset game", null, null) {
             glView.queueEvent { Native.reset() }
             closePauseMenu()
@@ -589,7 +633,10 @@ class EmulatorActivity : Activity() {
     }
 
     override fun dispatchGenericMotionEvent(e: MotionEvent): Boolean {
-        if (vlm) return super.dispatchGenericMotionEvent(e)
+        if (vlm) {
+            if (!menuOpen && e.action == MotionEvent.ACTION_MOVE) vlmMotion(e)
+            return super.dispatchGenericMotionEvent(e)
+        }
         if (!menuOpen && (e.source and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK
             && e.action == MotionEvent.ACTION_MOVE) {
             pad.onMotion(e)

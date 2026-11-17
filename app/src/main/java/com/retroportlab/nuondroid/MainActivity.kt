@@ -386,6 +386,13 @@ class MainActivity : Activity() {
             ui.setRowValue(trackRow, Prefs.TRACK_NAMES[prefs.trackName])
         }
         list.addView(trackRow)
+        lateinit var skipRow: View
+        fun skipName() = if (prefs.vlmTriggerSkip) "Triggers (R2 / L2)" else "Shoulders (R1 / L1)"
+        skipRow = ui.row("Skip tracks with", "The other pair turns automatic effect changes on and off", skipName()) {
+            prefs.vlmTriggerSkip = !prefs.vlmTriggerSkip
+            ui.setRowValue(skipRow, skipName())
+        }
+        list.addView(skipRow)
         list.addView(ui.row("Track names from Spotify",
             if (NowPlaying.allowed(this)) "Allowed" else "Needs notification access (if Android says it's restricted, see App info › ⋮ › Allow restricted settings), or turn on Device Broadcast Status in Spotify's settings",
             if (NowPlaying.allowed(this)) null else "Allow") { NowPlaying.openSettings(this) })

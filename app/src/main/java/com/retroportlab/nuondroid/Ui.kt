@@ -63,7 +63,7 @@ class Ui(private val ctx: Context) {
         val texts = LinearLayout(ctx)
         texts.orientation = LinearLayout.VERTICAL
         texts.addView(text(title, 17f, TEXT, true).apply { tag = "title" })
-        if (!subtitle.isNullOrEmpty()) texts.addView(text(subtitle, 13f, SUBTEXT, false))
+        if (!subtitle.isNullOrEmpty()) texts.addView(text(subtitle, 13f, SUBTEXT, false).apply { tag = "subtitle" })
         r.addView(texts, LinearLayout.LayoutParams(0, -2, 1f))
         if (value != null) r.addView(text(value, 15f, ACCENT, true).apply { tag = "value" })
         r.layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6f) }
@@ -71,6 +71,7 @@ class Ui(private val ctx: Context) {
     }
 
     fun setRowValue(row: View, value: String) { (row.findViewWithTag<View>("value") as? TextView)?.text = value }
+    fun setRowSubtitle(row: View, s: String) { (row.findViewWithTag<View>("subtitle") as? TextView)?.text = s }
     fun setRowTitle(row: View, title: String) { (row.findViewWithTag<View>("title") as? TextView)?.text = title }
 
     /** Turns a row's value into a filled pill (update banner, badges). */

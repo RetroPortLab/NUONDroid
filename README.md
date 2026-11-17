@@ -115,7 +115,7 @@ install it once from the **Samsung DVD-N501 firmware update** (`nuon.zip`, or th
 
 **Music → Play along with another app** shows VLM for whatever another app is playing:
 Spotify, YouTube Music, a radio app. Start the music there first. That app keeps
-playing it; NUONDroid only listens, and R1 / L1 skip tracks in that app like headphone
+playing it; NUONDroid only listens, and R2 / L2 skip tracks in that app like headphone
 buttons do.
 
 Android asks for two things:
@@ -146,8 +146,11 @@ again. Or skip notification access: in Spotify, turn on **Device Broadcast Statu
 |---|---|
 | A / B (or d-pad right / left) | Next / previous effect |
 | X / Y | Random effect |
-| R1 / L1 (or d-pad down / up) | Next / previous track |
-| L2 / R2 | Effects change by themselves: on / off |
+| R2 / L2 (or d-pad down / up) | Next / previous track |
+| R1 / L1 | Effects change by themselves: on / off |
+
+*Skip tracks with* (Settings or the menu) swaps the two pairs: R1 / L1 skip tracks and
+R2 / L2 turn automatic effect changes on and off.
 | L3 / R3 (stick clicks) | Track name: off / when the track changes / always |
 | Select + Start, Back | Menu |
 

@@ -84,6 +84,11 @@ class Prefs private constructor(private val file: File) {
         get() = getBool("vlmAuto", true)
         set(v) = putBool("vlmAuto", v)
 
+    /** Music (VLM): true = R2 / L2 skip tracks (R1 / L1 toggle auto effects), false = the other way round. */
+    var vlmTriggerSkip: Boolean
+        get() = getBool("vlmTriggerSkip", true)
+        set(v) = putBool("vlmTriggerSkip", v)
+
     /** Music (VLM): track and artist on screen. Index into [TRACK_NAMES]. */
     var trackName: Int
         get() = getInt("trackName", 1).coerceIn(0, TRACK_NAMES.size - 1)
