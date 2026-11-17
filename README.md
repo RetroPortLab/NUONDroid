@@ -102,18 +102,18 @@ install it once from the **Samsung DVD-N501 firmware update** (`nuon.zip`, or th
 How it works: the core loads the player's `pe` like a program and calls into it the way
 the player's own menu shell does - init, load the built-in effects (152), switch to the
 audio player, EnterVLM, VLMChangeEffect - on MPE3, with VLM's renderer running on MPE2.
-The music is decoded on the Android side, played through AAudio, and the last 128
-played samples are written each frame where VLM reads its audio. VLM draws 180×120
-frames (the player scaled them up too) at about 20 fps. Effects that stay black with
-your music are skipped.
+The music is decoded on the Android side and played through AAudio. In the player,
+VLM's input comes from the CD-audio path; NUONDroid supplies the same from what has
+just played:
 
-Beat detection is VLM's own. In the player it's fed by the CD-audio path ("CD Beat"
-reports); NUONDroid sends the same kind of report, about 240 a second, from the music
-it plays: how far a bass band (kick drums) and a treble band (snares, hats) rise above
-their recent average, plus the overall level. VLM's detector, tempo tracker and the
-effects that follow the beat take it from there. Steady sound (drones, held notes)
-reads as no beat. See `patches/0008` and `src/vlmhost.cpp` for what the
-emulator adds for it.
+- a 128-bin spectrum (VLM's band analysis), as |FFT|^1.5 to match the treble weighting
+  VLM applies;
+- the newest 64 stereo samples (the oscilloscope-style effects);
+- about 240 reports a second of low-band and high-band rises plus the overall level,
+  which drive VLM's own beat detection, tempo tracking and automatic gain.
+
+VLM draws 175×119 frames (the player scaled them up too) at about 20 fps. Effects that
+stay black with your music are skipped.
 
 ## Performance: read this first
 

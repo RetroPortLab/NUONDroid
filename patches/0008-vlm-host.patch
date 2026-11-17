@@ -86,10 +86,10 @@ index 4e0fea9..f838f75 100644
    {
 diff --git a/src/vlmhost.cpp b/src/vlmhost.cpp
 new file mode 100644
-index 0000000..3233797
+index 0000000..f868ba0
 --- /dev/null
 +++ b/src/vlmhost.cpp
-@@ -0,0 +1,269 @@
+@@ -0,0 +1,318 @@
 +// NUONDroid: VLM host.
 +//
 +// Runs the playback engine ("pe") of a NUON DVD player's firmware on its own and
@@ -116,6 +116,8 @@ index 0000000..3233797
 +#include "NuonMemoryMap.h"
 +#include <cstdint>
 +#include <cstdio>
++#include <cmath>
++#include <cstdlib>
 +#include <cstring>
 +#include <atomic>
 +
@@ -138,7 +140,8 @@ index 0000000..3233797
 +constexpr uint32 PE_SLEEP_LOOP  = 0x805FCEB2;  // sleep's loop head, between engine ticks
 +constexpr uint32 HAL_MEMCPY     = 0x80006160;  // HALtab entry: memcpy(src, dst, len)
 +constexpr uint32 VLM_MGR        = 0x80630AD0;  // VLMMgr; +0x28 = last finished frame
-+constexpr uint32 VLM_AUDIO      = 0x8062FDA0;  // 128 words L16|R16 VLM reads each frame
++constexpr uint32 VLM_SPECTRUM   = 0x8062FDA0;  // 128 words: spectrum magnitudes (MPE3's band analysis)
++constexpr uint32 VLM_WAVE       = 0x8062FFA0;  // 64 words L16|R16: waveform (the renderer's scopes)
 +constexpr uint32 VLM_EFFECT_NOW = 0x80630228;  // current effect number
 +constexpr uint32 VLM_EFFECTS    = 0x80637EA4;  // number of effects
 +constexpr uint32 MPE3_FIELDS    = 0x824;       // MPE3 DTRAM: video field counter VLM paces on
@@ -166,12 +169,61 @@ index 0000000..3233797
 +struct Onset { int32 bass, treble, level; };
 +Onset g_onset[16];          // queued detector inputs (four per 1/60 s of music)
 +std::atomic<uint32> g_onsetWr{0}, g_onsetRd{0};
-+uint32 g_audio[128];        // host order, L16|R16
++int16_t g_pcm[512];         // last 256 stereo frames, interleaved
 +std::atomic<bool> g_audioNew{false};
 +
 +inline uint8* SysPtr(uint32 a) { return nuonEnv.systemBusDRAM + (a & SYSTEM_BUS_VALID_MEMORY_MASK); }
 +inline uint32 Rd32(const uint8* p) { return (uint32)p[0] << 24 | (uint32)p[1] << 16 | (uint32)p[2] << 8 | p[3]; }
 +inline void Wr32(uint8* p, uint32 v) { p[0] = (uint8)(v >> 24); p[1] = (uint8)(v >> 16); p[2] = (uint8)(v >> 8); p[3] = (uint8)v; }
++
++// In-place radix-2 FFT, n a power of two.
++void Fft(float* re, float* im, int n) {
++  for (int i = 1, j = 0; i < n; i++) {
++    int bit = n >> 1;
++    for (; j & bit; bit >>= 1) j ^= bit;
++    j ^= bit;
++    if (i < j) { float t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; }
++  }
++  for (int len = 2; len <= n; len <<= 1) {
++    const float a = -6.2831853f / (float)len;
++    for (int i = 0; i < n; i += len)
++      for (int k = 0; k < len / 2; k++) {
++        const float wr = cosf(a * k), wi = sinf(a * k);
++        const int u = i + k, v = i + k + len / 2;
++        const float xr = re[v] * wr - im[v] * wi, xi = re[v] * wi + im[v] * wr;
++        re[v] = re[u] - xr; im[v] = im[u] - xi;
++        re[u] += xr; im[u] += xi;
++      }
++  }
++}
++
++void WriteAudio() {
++  // Waveform: the newest 64 frames as the hardware holds them, L16|R16.
++  uint8* w = SysPtr(VLM_WAVE);
++  for (int i = 0; i < 64; i++) {
++    const int f = 256 - 64 + i;
++    Wr32(w + i * 4, (uint32)(uint16_t)g_pcm[f * 2] << 16 | (uint16_t)g_pcm[f * 2 + 1]);
++  }
++  // Spectrum: 256-point FFT of the mono mix (Hann window), 128 bins. VLM's band
++  // analysis uses bins 0-63 with gains rising steeply toward the treble (16 to 3840,
++  // on top of weighting each bin by its index), so it expects a spectrum that falls
++  // faster than plain magnitude: |X|^1.5 balances the bands on real music, and the
++  // scale keeps them (0..0x3FFF) mostly in range at the gain VLM's AGC settles on.
++  static float re[256], im[256];
++  for (int i = 0; i < 256; i++) {
++    const float hann = 0.5f - 0.5f * cosf(6.2831853f * (float)i / 256.0f);
++    re[i] = 0.5f * ((float)g_pcm[i * 2] + (float)g_pcm[i * 2 + 1]) * hann;
++    im[i] = 0;
++  }
++  Fft(re, im, 256);
++  uint8* q = SysPtr(VLM_SPECTRUM);
++  for (int k = 0; k < 128; k++) {
++    const float p2 = re[k] * re[k] + im[k] * im[k];
++    float m = powf(p2, 0.75f) * 4.0e-3f;
++    if (m > 2.0e9f) m = 2.0e9f;
++    Wr32(q + k * 4, (uint32)(int32)m);
++  }
++}
 +
 +void StartCall(uint32 addr, const uint32* args, int nargs) {
 +  MPE& m = nuonEnv.mpe[3];
@@ -227,11 +279,8 @@ index 0000000..3233797
 +    Wr32(t + 4, Rd32(t + 4) + add);
 +  } else g_time = now;
 +
-+  // Audio window.
-+  if (g_audioNew.exchange(false)) {
-+    uint8* q = SysPtr(VLM_AUDIO);
-+    for (int i = 0; i < 128; i++) Wr32(q + i * 4, g_audio[i]);
-+  }
++  // Audio: what the player's CD-audio path leaves for VLM each block.
++  if (g_audioNew.exchange(false)) WriteAudio();
 +
 +  // Call sequence: the next call starts once the previous one hit the trap.
 +  if (g_inCall && !(m.mpectl & MPECTRL_MPEGO)) {
@@ -319,9 +368,9 @@ index 0000000..3233797
 +// ---------------------------------------------------------------- frontend --
 +extern "C" {
 +
-+// 128 stereo frames of the music now playing, interleaved L,R.
++// The last 256 stereo frames that went to the speaker, interleaved L,R.
 +void nuance_vlm_set_audio(const int16_t* lr) {
-+  for (int i = 0; i < 128; i++) g_audio[i] = (uint32)(uint16_t)lr[i * 2] << 16 | (uint16_t)lr[i * 2 + 1];
++  memcpy(g_pcm, lr, sizeof g_pcm);
 +  g_audioNew.store(true);
 +}
 +
@@ -345,12 +394,12 @@ index 0000000..3233797
 +}
 +
 +// The last finished VLM frame: 32-bit big-endian YCrCb pixels, stride 360,
-+// picture in the top-left w x h. Null until VLM is running.
++// picture in the top-left w x h (175x119). Null until VLM is running.
 +const uint8_t* nuance_vlm_frame(int* w, int* h, int* stride) {
 +  if (g_step < SEQ_LEN) return nullptr;
 +  const uint32 a = Rd32(SysPtr(VLM_MGR + 0x28));
 +  if ((a >> 24) != 0x40) return nullptr;
-+  *w = 180; *h = 120; *stride = 360;
++  *w = 175; *h = 119; *stride = 360;   // VLM draws 180x120, but the last column and row hold no picture
 +  return nuonEnv.mainBusDRAM + (a & MAIN_BUS_VALID_MEMORY_MASK);
 +}
 +
