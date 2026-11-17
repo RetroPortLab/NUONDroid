@@ -129,9 +129,8 @@ Android asks for two things:
   hear other apps' sound in full quality. NUONDroid captures sound only, never the screen.
 
 Without screen capture, or if the playing app blocks capture (some music apps do),
-NUONDroid uses Android's Visualizer instead: short low-resolution snapshots of
-what's playing, 20 a second. VLM still follows the music and the beat, a little
-more coarsely. It switches by itself when capture hears nothing but the Visualizer
+NUONDroid uses Android's Visualizer instead: 8-bit mono, read every 15 ms so it
+forms an unbroken signal. VLM follows the beat about as well as with capture. It switches by itself when capture hears nothing but the Visualizer
 hears music. Android allows one screen capture at a time, so starting a Chromecast cast
 ends NUONDroid's capture; it switches to the Visualizer then too.
 

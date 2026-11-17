@@ -22,8 +22,8 @@ import android.view.KeyEvent
  *  - Playback capture (Android 10+, needs the screen-capture consent): the real
  *    stereo audio. Apps can opt out of it, and some music apps do.
  *  - Android's Visualizer on the whole output: works with nearly every app, but gives
- *    only short 8-bit snapshots, 20 a second. They are stretched into a continuous
- *    signal; VLM's beat detection and spectrum still follow the music, a bit coarser.
+ *    only 8-bit mono. Polled for its newest samples every 15 ms, it still gives an
+ *    unbroken signal, so VLM's beat detection works about as well as with capture.
  * When capture hears nothing while the Visualizer hears music (an app that opted
  * out), it switches to the Visualizer by itself.
  */
@@ -35,16 +35,12 @@ class LiveAudio(private val ctx: Context, private val status: (String) -> Unit) 
     private var capThread: Thread? = null
     private var vis: Visualizer? = null
     private var visRate = 44100
-    private var lastVisT = 0L
     private var silentSince = 0L
     private var capSilentSince = 0L
     private var visHeard = false
     private var told = ""
     private val main = android.os.Handler(android.os.Looper.getMainLooper())
     private var pcm = ShortArray(0)
-    private var window = ByteArray(0)
-    private var winPos = 0
-    private var winDir = 1
 
     /** Main thread. [projection] null = Visualizer only. */
     fun start(projection: MediaProjection?) {
@@ -58,8 +54,8 @@ class LiveAudio(private val ctx: Context, private val status: (String) -> Unit) 
             }, main)
             say("Listening to music playing on this device")
         } else if (vis != null) {
-            useVis = true
             Native.vlmSetRate(visRate)
+            useVis = true
             say("Listening to music playing on this device")
         } else {
             say("This device doesn't let NUONDroid hear other apps")
@@ -73,6 +69,8 @@ class LiveAudio(private val ctx: Context, private val status: (String) -> Unit) 
         capThread?.join(500)
         runCatching { record?.release() }
         record = null
+        visThread?.interrupt()
+        visThread?.join(500)
         runCatching { vis?.enabled = false }
         runCatching { vis?.release() }
         vis = null
@@ -126,6 +124,8 @@ class LiveAudio(private val ctx: Context, private val status: (String) -> Unit) 
     }
 
     // ------------------------------------------------------------- visualizer --
+    private var visThread: Thread? = null
+
     private fun startVisualizer() {
         vis = runCatching {
             Visualizer(0).apply {
@@ -133,19 +133,38 @@ class LiveAudio(private val ctx: Context, private val status: (String) -> Unit) 
                 captureSize = Visualizer.getCaptureSizeRange()[1]
                 scalingMode = Visualizer.SCALING_MODE_NORMALIZED
                 visRate = (samplingRate / 1000).takeIf { it in 8000..192000 } ?: 44100
-                setDataCaptureListener(object : Visualizer.OnDataCaptureListener {
-                    override fun onWaveFormDataCapture(v: Visualizer, wave: ByteArray, rate: Int) = onWave(wave)
-                    override fun onFftDataCapture(v: Visualizer, fft: ByteArray, rate: Int) {}
-                }, Visualizer.getMaxCaptureRate(), true, false)
                 enabled = true
             }
         }.onFailure { Log.w(TAG, "Visualizer unavailable", it) }.getOrNull()
+        val v = vis ?: return
+        visThread = Thread({ pollLoop(v) }, "vlm-vis").apply { priority = Thread.MAX_PRIORITY - 1; start() }
     }
 
-    /** ~20 times a second, on the main thread. */
-    private fun onWave(wave: ByteArray) {
-        if (quit) return
-        val now = SystemClock.uptimeMillis()
+    /**
+     * Asks the Visualizer for the newest samples every 15 ms (its own callbacks come only
+     * 20 times a second, each a 23 ms snapshot, which loses most drum hits in between).
+     * Each answer ends at "now", so its last 15 ms of samples continue the previous one:
+     * VLM gets an unbroken 8-bit signal, as good for beat detection as the real thing.
+     */
+    private fun pollLoop(v: Visualizer) {
+        val wave = ByteArray(v.captureSize)
+        var lastNs = 0L
+        while (!quit) {
+            try { Thread.sleep(15) } catch (e: InterruptedException) { break }
+            val ok = runCatching { v.getWaveForm(wave) == Visualizer.SUCCESS }.getOrDefault(false)
+            val nowNs = System.nanoTime()
+            if (!ok) { lastNs = 0; continue }
+            onWave(wave, SystemClock.uptimeMillis())
+            if (useVis) {
+                val frames = if (lastNs == 0L) 0 else ((nowNs - lastNs) * visRate / 1_000_000_000L).toInt().coerceAtMost(visRate / 5)
+                if (frames > 0) feedVisualizer(wave, frames)
+            }
+            lastNs = nowNs
+        }
+    }
+
+    /** Poll thread, ~65 times a second. */
+    private fun onWave(wave: ByteArray, now: Long) {
         var level = 0
         for (b in wave) { val d = Math.abs((b.toInt() and 0xFF) - 128); if (d > level) level = d }
         val heard = level > 3
@@ -156,9 +175,8 @@ class LiveAudio(private val ctx: Context, private val status: (String) -> Unit) 
             if (cap > 64) { capSilentSince = now; visHeard = false; silentSince = now }
             else if (heard) visHeard = true
             // The playing app doesn't allow capture: use the Visualizer.
-            if (now - capSilentSince > 2000 && visHeard) switchToVisualizer("capture silent, Visualizer hears music")
+            if (now - capSilentSince > 2000 && visHeard) main.post { switchToVisualizer("capture silent, Visualizer hears music") }
         }
-        if (useVis) feedVisualizer(wave, now)
 
         if (heard || (!useVis && capSilentSince == now)) silentSince = now
         if (silentSince == 0L) silentSince = now
@@ -170,34 +188,22 @@ class LiveAudio(private val ctx: Context, private val status: (String) -> Unit) 
     private fun switchToVisualizer(why: String) {
         if (useVis || quit) return
         Log.i(TAG, "live audio: $why, using the Visualizer")
-        useVis = true
         runCatching { record?.stop() }
         if (vis == null) startVisualizer()
         if (vis == null) { say("Lost the music: Android stopped NUONDroid hearing it"); return }
         Native.vlmSetRate(visRate)
-        lastVisT = 0
+        useVis = true
     }
 
-    /**
-     * Turns 20 snapshots a second (each ~23 ms of an 8-bit waveform) into the steady
-     * stream VLM expects: each snapshot is played back and forth until the next one
-     * arrives, so there are no clicks at the joins.
-     */
-    private fun feedVisualizer(wave: ByteArray, now: Long) {
-        window = wave.copyOf()
-        val dt = if (lastVisT == 0L) 50L else (now - lastVisT).coerceIn(0, 200)
-        lastVisT = now
-        val frames = (visRate * dt / 1000).toInt()
-        if (frames <= 0 || window.isEmpty()) return
+    /** The newest [frames] samples of the window (repeating its start if the poll was late). */
+    private fun feedVisualizer(wave: ByteArray, frames: Int) {
         if (pcm.size < frames * 2) pcm = ShortArray(frames * 2)
-        val len = window.size
-        if (winPos >= len) winPos = len - 1
+        val len = wave.size
         for (i in 0 until frames) {
-            val s = (((window[winPos].toInt() and 0xFF) - 128) * 256).toShort()
+            val k = len - frames + i
+            val b = wave[if (k >= 0) k else Math.floorMod(k, len)]
+            val s = (((b.toInt() and 0xFF) - 128) * 256).toShort()
             pcm[i * 2] = s; pcm[i * 2 + 1] = s
-            winPos += winDir
-            if (winPos >= len) { winPos = len - 2; winDir = -1 }
-            else if (winPos < 0) { winPos = 1; winDir = 1 }
         }
         Native.vlmPush(pcm, 0, frames)
     }
