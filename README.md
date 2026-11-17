@@ -128,7 +128,8 @@ Without screen capture, or if the playing app blocks capture (some music apps do
 NUONDroid uses Android's Visualizer instead: short low-resolution snapshots of
 what's playing, 20 a second. VLM still follows the music and the beat, a little
 more coarsely. It switches by itself when capture hears nothing but the Visualizer
-hears music.
+hears music. Android allows one screen capture at a time, so starting a Chromecast cast
+ends NUONDroid's capture; it switches to the Visualizer then too.
 
 **Track names.** The track and artist show in the bottom-right corner: *Off*, *When
 the track changes* (6 seconds, the default) or *Always*. Set it in Settings, in the

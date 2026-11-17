@@ -125,8 +125,11 @@ aaudio_data_callback_result_t audioCb(AAudioStream*, void*, void* out, int32_t n
     uint32_t rd = g_rd.load(std::memory_order_relaxed);
     const uint32_t wr = g_wr.load(std::memory_order_acquire);
     uint32_t avail = wr - rd;
-    const bool live = g_vlmLive.load(std::memory_order_relaxed);
-    if (live && avail > (uint32_t)numFrames + 2048) { rd += avail - (uint32_t)numFrames - 1024; avail = wr - rd; }
+    if (g_vlmLive.load(std::memory_order_relaxed)) {
+        // Live input is "played" as it arrives (vlmPush); the speaker gets silence.
+        memset(dst, 0, (size_t)numFrames * 2 * sizeof(int16_t));
+        return AAUDIO_CALLBACK_RESULT_CONTINUE;
+    }
     uint32_t n = avail < (uint32_t)numFrames ? avail : (uint32_t)numFrames;
     for (uint32_t i = 0; i < n; ++i) {
         const uint32_t s = ((rd + i) & (RING_FRAMES - 1)) * 2;
@@ -134,9 +137,17 @@ aaudio_data_callback_result_t audioCb(AAudioStream*, void*, void* out, int32_t n
         dst[i * 2 + 1] = g_ring[s + 1];
     }
     if (n < (uint32_t)numFrames) memset(dst + n * 2, 0, (numFrames - n) * 2 * sizeof(int16_t));  // underrun: silence
-    if (live) memset(dst, 0, (size_t)numFrames * 2 * sizeof(int16_t));
     g_rd.store(rd + n, std::memory_order_release);
     return AAUDIO_CALLBACK_RESULT_CONTINUE;
+}
+
+// The output device changed under the stream (casting started or stopped, headphones,
+// HDMI): AAudio stops calling back for good. Reopened on the GL thread (frame()).
+std::atomic<bool> g_audioLost{false};
+int g_streamRate = 0;
+void audioErrorCb(AAudioStream*, void*, aaudio_result_t err) {
+    LOGI("AAudio: stream error %d, reopening", (int)err);
+    g_audioLost.store(true);
 }
 
 void audioStart(int rate) {
@@ -151,6 +162,8 @@ void audioStart(int rate) {
     AAudioStreamBuilder_setSharingMode(b, AAUDIO_SHARING_MODE_SHARED);
     AAudioStreamBuilder_setPerformanceMode(b, AAUDIO_PERFORMANCE_MODE_NONE);
     AAudioStreamBuilder_setDataCallback(b, audioCb, nullptr);
+    AAudioStreamBuilder_setErrorCallback(b, audioErrorCb, nullptr);
+    g_streamRate = rate;
     if (AAudioStreamBuilder_openStream(b, &g_stream) != AAUDIO_OK) {
         LOGE("AAudio: openStream failed");
         g_stream = nullptr;
@@ -201,6 +214,9 @@ uint32_t vlmPush(const int16_t* data, uint32_t frames) {
         g_ring[s + 1] = data[i * 2 + 1];
     }
     g_wr.store(wr + n, std::memory_order_release);
+    // Live input is already playing in the other app: it counts as played now, so VLM
+    // sees it at once and nothing waits on (or is lost with) the AAudio stream.
+    if (g_vlmLive.load(std::memory_order_relaxed)) g_rd.store(wr + n, std::memory_order_release);
     return n;
 }
 
@@ -555,6 +571,10 @@ JNIEXPORT jboolean JNICALL JNI(loadGame)(JNIEnv* env, jobject, jstring path) {
 
 JNIEXPORT void JNICALL JNI(frame)(JNIEnv*, jobject) {
     if (!g_glReady) return;
+    if (g_audioLost.exchange(false)) {
+        std::lock_guard<std::recursive_mutex> lk(g_streamMx);
+        if (g_stream) { audioStop(); audioStart(g_streamRate); if (g_paused.load()) AAudioStream_requestPause(g_stream); }
+    }
     if (g_loaded && !g_paused.load()) {
         g_haveFrame = false;
         // Normally one 60 Hz field per drawn frame. When casting, two fields per frame:

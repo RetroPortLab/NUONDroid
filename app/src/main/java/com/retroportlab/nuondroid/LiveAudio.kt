@@ -40,6 +40,7 @@ class LiveAudio(private val ctx: Context, private val status: (String) -> Unit) 
     private var capSilentSince = 0L
     private var visHeard = false
     private var told = ""
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
     private var pcm = ShortArray(0)
     private var window = ByteArray(0)
     private var winPos = 0
@@ -50,6 +51,11 @@ class LiveAudio(private val ctx: Context, private val status: (String) -> Unit) 
         Native.vlmSetLive(true)
         startVisualizer()
         if (projection != null && Build.VERSION.SDK_INT >= 29 && startCapture(projection)) {
+            // Android allows one screen capture at a time: starting a cast (screen
+            // mirroring to a Chromecast) ends ours. Carry on with the Visualizer.
+            projection.registerCallback(object : MediaProjection.Callback() {
+                override fun onStop() { main.post { switchToVisualizer("screen capture ended") } }
+            }, main)
             say("Listening to music playing on this device")
         } else if (vis != null) {
             useVis = true
@@ -108,7 +114,10 @@ class LiveAudio(private val ctx: Context, private val status: (String) -> Unit) 
         val buf = ShortArray(960 * 2)      // 20 ms
         while (!quit && !useVis) {
             val n = r.read(buf, 0, buf.size)
-            if (n <= 0) { if (n < 0) break else continue }
+            if (n <= 0) {
+                if (n < 0) { main.post { switchToVisualizer("capture error $n") }; break }
+                continue
+            }
             var peak = capPeak
             for (i in 0 until n) { val v = Math.abs(buf[i].toInt()); if (v > peak) peak = v }
             capPeak = peak
@@ -146,14 +155,8 @@ class LiveAudio(private val ctx: Context, private val status: (String) -> Unit) 
             val cap = capPeak; capPeak = 0
             if (cap > 64) { capSilentSince = now; visHeard = false; silentSince = now }
             else if (heard) visHeard = true
-            if (now - capSilentSince > 2000 && visHeard) {
-                // The playing app doesn't allow capture: use the Visualizer.
-                Log.i(TAG, "playback capture silent, Visualizer hears music: switching")
-                useVis = true
-                runCatching { record?.stop() }
-                Native.vlmSetRate(visRate)
-                lastVisT = 0
-            }
+            // The playing app doesn't allow capture: use the Visualizer.
+            if (now - capSilentSince > 2000 && visHeard) switchToVisualizer("capture silent, Visualizer hears music")
         }
         if (useVis) feedVisualizer(wave, now)
 
@@ -161,6 +164,18 @@ class LiveAudio(private val ctx: Context, private val status: (String) -> Unit) 
         if (silentSince == 0L) silentSince = now
         if (now - silentSince > 3000) say("No music yet: start it playing in Spotify or another app")
         else say("Listening to music playing on this device")
+    }
+
+    /** Main thread. */
+    private fun switchToVisualizer(why: String) {
+        if (useVis || quit) return
+        Log.i(TAG, "live audio: $why, using the Visualizer")
+        useVis = true
+        runCatching { record?.stop() }
+        if (vis == null) startVisualizer()
+        if (vis == null) { say("Lost the music: Android stopped NUONDroid hearing it"); return }
+        Native.vlmSetRate(visRate)
+        lastVisT = 0
     }
 
     /**
