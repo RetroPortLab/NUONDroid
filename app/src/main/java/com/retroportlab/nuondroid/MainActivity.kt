@@ -369,12 +369,20 @@ class MainActivity : Activity() {
         val list = LinearLayout(this)
         ui.page(root, "Settings", list, ui.pill("Back") { showLibrary() })
 
-        list.addView(ui.sectionTitle("Library"))
-        val folder = prefs.gamesDir
-        val first = ui.row("Games folder", folder.ifEmpty { "Not chosen" }, "Change") { pickFolder() }
-        list.addView(first)
-        list.addView(ui.row("File access", if (hasStorageAccess()) "Allowed" else "Not allowed: games can't be read",
-            if (hasStorageAccess()) null else "Allow") { if (!hasStorageAccess()) requestStorageAccess() })
+        list.addView(ui.sectionTitle("Display"))
+        list.addView(cycleRow("Scanlines", "CRT-style lines between the picture's rows", "scanlines", Prefs.SCANLINE_NAMES))
+        list.addView(cycleRow("Screen", "4:3 fills the height; Stretch fills the whole screen", "aspect", Prefs.SCREEN_NAMES))
+        list.addView(cycleRow("Upscaling", "Soft: plain smoothing. Sharp pixels: crisp, even pixels. Smooth HD: bicubic, for a clean high-res look",
+            "upscale", Prefs.UPSCALE_NAMES))
+        list.addView(toggleRow("Show FPS", "Screen and game frame rates, and NUON speed, in the corner while playing", "showFps", false))
+        list.addView(toggleRow("Core CRT shader", "NuanceResurrection's own CRT effect. Heavier on the GPU; takes effect next game",
+            "coreCrt", false))
+
+        list.addView(sectionAndControls())
+
+        list.addView(ui.sectionTitle("Performance"))
+        list.addView(toggleRow("Faster CPU mode", "Runs NUON code in pre-decoded blocks. Turn off if a game misbehaves; takes effect next game",
+            "blockMode", true))
 
         list.addView(ui.sectionTitle("Music (VLM)"))
         list.addView(ui.row("Player firmware", if (VlmFirmware.installed(this)) "Samsung DVD-N501 (installed)" else "Not installed: VLM needs it",
@@ -423,22 +431,14 @@ class MainActivity : Activity() {
         }
         list.addView(resRow)
 
-        list.addView(ui.sectionTitle("Display"))
-        list.addView(cycleRow("Scanlines", "CRT-style lines between the picture's rows", "scanlines", Prefs.SCANLINE_NAMES))
-        list.addView(cycleRow("Screen", "4:3 fills the height; Stretch fills the whole screen", "aspect", Prefs.SCREEN_NAMES))
-        list.addView(cycleRow("Upscaling", "Soft: plain smoothing. Sharp pixels: crisp, even pixels. Smooth HD: bicubic, for a clean high-res look",
-            "upscale", Prefs.UPSCALE_NAMES))
-        list.addView(toggleRow("Show FPS", "Screen and game frame rates, and NUON speed, in the corner while playing", "showFps", false))
-        list.addView(toggleRow("Core CRT shader", "NuanceResurrection's own CRT effect. Heavier on the GPU; takes effect next game",
-            "coreCrt", false))
+        list.addView(ui.sectionTitle("Library"))
+        val folder = prefs.gamesDir
+        val first = ui.row("Games folder", folder.ifEmpty { "Not chosen" }, "Change") { pickFolder() }
+        list.addView(first)
+        list.addView(ui.row("File access", if (hasStorageAccess()) "Allowed" else "Not allowed: games can't be read",
+            if (hasStorageAccess()) null else "Allow") { if (!hasStorageAccess()) requestStorageAccess() })
 
-        list.addView(ui.sectionTitle("Performance"))
-        list.addView(toggleRow("Faster CPU mode", "Runs NUON code in pre-decoded blocks. Turn off if a game misbehaves; takes effect next game",
-            "blockMode", true))
-
-        list.addView(sectionAndControls())
-
-        list.addView(ui.sectionTitle("Updates"))
+        list.addView(ui.sectionTitle("About"))
         lateinit var check: View
         check = ui.row("Check for updates", "Looks for a newer NUONDroid on GitHub and installs it",
             foundUpdate?.let { it.tag + " available" } ?: "Check") { checkForUpdate(check) }
@@ -446,11 +446,10 @@ class MainActivity : Activity() {
         list.addView(toggleRow("Check automatically", "Look for a new version when NUONDroid starts (at most twice a day)",
             "autoUpdate", true))
 
-        list.addView(ui.sectionTitle("About"))
         list.addView(ui.row("NUONDroid " + versionName(),
             "A NUON emulator for Android, built on NuanceResurrection.\n"
                 + "There's no ARM JIT yet, so games run on the interpreter; some will run below full speed.", null) { })
-        first.requestFocus()
+        list.getChildAt(1)?.requestFocus()
     }
 
     private fun sectionAndControls(): View {
